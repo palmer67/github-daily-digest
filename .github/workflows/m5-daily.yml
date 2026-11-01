@@ -1,0 +1,218 @@
+name: 每日速递 · 定时投递与监控
+
+# 主跑 07:37（离整点远，避开 Actions 高峰），备用 08:22。
+# 两天都在同一个 workflow 里：备用入口先查「今天成功了吗」，成功就秒退（策划书 5.2）。
+on:
+  schedule:
+    - cron: '37 7 * * *'
+      timezone: 'Asia/Shanghai'
+    - cron: '22 8 * * *'
+      timezone: 'Asia/Shanghai'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'happy=真跑｜badkey=失效 DeepSeek key｜badwebhook=失效 webhook｜backup=备用入口｜stale=心跳漏报告警演示'
+        type: choice
+        options: [happy, badkey, badwebhook, backup, stale]
+        default: happy
+      columns:
+        description: '只跑指定栏目（逗号分隔，留空=全部）'
+        default: ''
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-digest
+  cancel-in-progress: false
+
+env:
+  TZ: Asia/Shanghai
+
+jobs:
+  unit-tests:
+    name: 单元测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: 安装依赖
+        run: python -m pip install --quiet -r requirements.txt
+      - name: 跑单测
+        run: python -m unittest discover -s tests -t tests -v
+
+  daily:
+    name: 定时投递
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: 安装依赖
+        run: python -m pip install --quiet -r requirements.txt
+
+      - name: 判定本轮身份（主跑 / 备用 / 故障注入）
+        id: mode
+        shell: bash
+        env:
+          MODE_INPUT: ${{ inputs.mode }}
+          SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          set -euo pipefail
+          mode="${MODE_INPUT:-}"
+          if [ -z "$mode" ]; then
+            if [ "$SCHEDULE" = "22 8 * * *" ]; then mode=backup; else mode=happy; fi
+          fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "本轮模式：$mode（schedule=$SCHEDULE）"
+
+      - name: 注入故障（仅故障演练）
+        if: steps.mode.outputs.mode == 'badkey' || steps.mode.outputs.mode == 'badwebhook'
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ steps.mode.outputs.mode }}" in
+            badkey)
+              echo "::warning::故障注入：把 DEEPSEEK_API_KEY 换成确定无效的 key"
+              echo "DEEPSEEK_API_KEY=sk-0000000000000000000000000000000000000000" >> "$GITHUB_ENV"
+              ;;
+            badwebhook)
+              echo "::warning::故障注入：把 webhook key 换成确定无效的值"
+              echo "WECOM_WEBHOOK_URL=https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=00000000-0000-0000-0000-000000000000" >> "$GITHUB_ENV"
+              ;;
+          esac
+
+      - name: 心跳漏报告警演示
+        id: stale
+        if: steps.mode.outputs.mode == 'stale'
+        shell: bash
+        run: |
+          set -o pipefail
+          python scripts/daily.py --stale-demo --date 2026-11-02 2>&1 | tee stale.log
+          grep -q "到点没有收到成功心跳" stale.log
+          echo "exit_code=0" >> "$GITHUB_OUTPUT"
+
+      - name: 跑每日速递
+        id: run
+        if: steps.mode.outputs.mode != 'stale'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          WECOM_WEBHOOK_URL: ${{ secrets.WECOM_WEBHOOK_URL }}
+          HEARTBEAT_URL: ${{ secrets.HEARTBEAT_URL }}
+          COLUMNS: ${{ inputs.columns }}
+          MODE: ${{ steps.mode.outputs.mode }}
+        run: |
+          set -o pipefail
+          set +e
+          args=()
+          [ -n "${COLUMNS:-}" ] && args+=(--columns "$COLUMNS")
+          case "$MODE" in
+            backup) args+=(--backup) ;;
+            badkey|badwebhook)
+              # 故障演练不碰真实日期：用远期日期 + --force，且后面不提交状态
+              args+=(--force --date 2026-12-31)
+              ;;
+          esac
+          echo "命令：python scripts/daily.py ${args[*]}"
+          python scripts/daily.py "${args[@]}" 2>&1 | tee daily.log
+          code=${PIPESTATUS[0]}
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          echo "退出码：$code"
+          exit 0
+
+      - name: 提交状态与心跳（只在主跑/备用真实运行时）
+        id: commit
+        if: steps.mode.outputs.mode == 'happy' || steps.mode.outputs.mode == 'backup'
+        shell: bash
+        run: |
+          set -o pipefail
+          if git diff --quiet -- state/; then
+            echo "状态文件没有变化（本次可能是秒退），不提交"
+            echo "commit_exit=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state/sent.json state/heartbeat.json
+          git commit -m "state: 每日速递推送记录（$(date +%F) 自动提交）"
+          set +e
+          git push
+          code=$?
+          echo "commit_exit=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: 写入 Step Summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## 每日速递（模式：${{ steps.mode.outputs.mode }}）"
+            echo
+            echo '```'
+            tail -n 40 daily.log 2>/dev/null || tail -n 20 stale.log 2>/dev/null || echo "（没有日志）"
+            echo '```'
+            echo
+            echo "- 退出码：${{ steps.run.outputs.exit_code }}"
+            echo "- 状态提交：${{ steps.commit.outputs.commit_exit }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 上传日志
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: m5-daily-logs
+          path: '*.log'
+
+      - name: 判定结果
+        shell: bash
+        env:
+          MODE: ${{ steps.mode.outputs.mode }}
+          DAILY_EXIT: ${{ steps.run.outputs.exit_code }}
+          COMMIT_EXIT: ${{ steps.commit.outputs.commit_exit }}
+        run: |
+          set -euo pipefail
+          case "${MODE}" in
+            stale)
+              grep -q "到点没有收到成功心跳" stale.log
+              echo "✅ 心跳漏报告警文案正确"
+              ;;
+            badkey)
+              test "${DAILY_EXIT}" = "0"
+              grep -q "DeepSeek 认证失败" daily.log
+              grep -q "已推送告警消息" daily.log
+              if grep -Eq "重试|retry|退避" daily.log; then
+                echo "❌ 认证失败不该重试"; exit 1
+              fi
+              echo "✅ 失效 DeepSeek key：降级推送 + 告警 + 没有重试"
+              ;;
+            badwebhook)
+              test "${DAILY_EXIT}" = "5"
+              grep -q "errcode=93000" daily.log
+              grep -q "推送失败" daily.log
+              if grep -q "心跳        : sent" daily.log; then
+                echo "❌ 推送失败时不允许发心跳"; exit 1
+              fi
+              echo "✅ 失效 webhook：任务判失败、心跳未发送"
+              ;;
+            backup)
+              test "${DAILY_EXIT}" = "0"
+              if grep -q "秒退" daily.log; then
+                echo "✅ 备用 cron 秒退，没有重复推送"
+              else
+                echo "ℹ️ 主跑没有成功过，备用 cron 本次补跑（退出码 0）"
+              fi
+              test "${COMMIT_EXIT:-0}" = "0"
+              ;;
+            *)
+              test "${DAILY_EXIT}" = "0"
+              test "${COMMIT_EXIT:-0}" = "0"
+              echo "✅ 主跑成功，状态已提交"
+              ;;
+          esac

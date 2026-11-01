@@ -18,13 +18,15 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Callable
 
+from . import monitor
 from .config import Config, ConfigError, load_config
 from .github import GitHubClient
 from .readme import fetch_readme
 from .renderer import render_messages
 from .state import already_pushed, load_state_doc, save_state_doc
 from .summarizer import SummaryResult, summarize
-from .summarizer.deepseek import DeepSeekClient
+from .summarizer.deepseek import DeepSeekClient, LLMAuthError
+from .summarizer.schema import fallback_card
 from .pipeline import run_column
 
 
@@ -68,6 +70,9 @@ class DailyReport:
     state_written: bool = False
     seconds: float = 0.0
     dry_run: bool = False
+    degraded: str = ""
+    alert: str = ""
+    heartbeat: str = ""
 
     @property
     def ok(self) -> bool:
@@ -89,6 +94,9 @@ class DailyReport:
             "state_path": self.state_path,
             "state_written": self.state_written,
             "seconds": round(self.seconds, 2),
+            "degraded": self.degraded,
+            "alert": self.alert,
+            "heartbeat": self.heartbeat,
             "columns": [
                 {
                     "id": c.column_id,
@@ -167,20 +175,47 @@ def summarize_columns(
     gh: GitHubClient,
     client: DeepSeekClient,
     runs: list[ColumnRun],
+    *,
+    auth_failed: list[str] | None = None,
 ) -> list[tuple[str, str, list[tuple[Any, Any]]]]:
-    """给每条候选拉 README 并生成卡片；同一项目只总结一次（跨栏目复用）。"""
+    """给每条候选拉 README 并生成卡片；同一项目只总结一次（跨栏目复用）。
+
+    M5：DeepSeek key 失效（401/402/403）时**不再逐条重试**，整批退化成「仓库原始简介」卡片，
+    由调用方补一条告警消息推给群里——比让 job 静默失败好，也比每张卡重试 3 次省 20 多分钟。
+    """
     by_name: dict[str, SummaryResult] = {}
     run_by_id = {r.column_id: r for r in runs}
     out: list[tuple[str, str, list[tuple[Any, Any]]]] = []
+    auth_error = ""
 
     for column_id, column_name, candidates in rendered:
         pairs: list[tuple[Any, Any]] = []
         run = run_by_id.get(column_id)
         for cand in candidates:
             cached = by_name.get(cand.full_name)
+            if cached is None and auth_error:
+                cached = SummaryResult.__new__(SummaryResult)
+                cached.card = fallback_card(cand, auth_error)
+                cached.ok = False
+                cached.attempts = 0
+                cached.issues = ["DeepSeek 认证失败，未调用模型"]
+                cached.trim_note = ""
+                cached.error = auth_error
             if cached is None:
                 text, _how = fetch_readme(gh, cand.full_name)
-                cached = summarize(client, cand, text)
+                try:
+                    cached = summarize(client, cand, text)
+                except LLMAuthError as e:
+                    auth_error = f"DeepSeek 认证失败（{e}）"
+                    if auth_failed is not None:
+                        auth_failed.append(auth_error)
+                    cached = SummaryResult.__new__(SummaryResult)
+                    cached.card = fallback_card(cand, auth_error)
+                    cached.ok = False
+                    cached.attempts = 0
+                    cached.issues = ["DeepSeek 认证失败，未调用模型"]
+                    cached.trim_note = ""
+                    cached.error = auth_error
                 by_name[cand.full_name] = cached
             pairs.append((cand, cached.card))
             if run is not None:
@@ -238,10 +273,20 @@ def run_daily(
         log("❌ 所有栏目都采集失败，不推送")
         return report
 
-    cards = summarize_columns(rendered, gh, client, runs)
+    auth_failed: list[str] = []
+    cards = summarize_columns(rendered, gh, client, runs, auth_failed=auth_failed)
     total_ok = sum(r.cards_ok for r in runs)
     total_cards = sum(r.cards_total for r in runs)
     log(f"卡片        : {total_ok}/{total_cards} 张通过")
+    if auth_failed:
+        report.degraded = auth_failed[0]
+        report.alert = monitor.alert_message(
+            day,
+            report.degraded,
+            f"今天的 {total_cards} 张卡全部退化成仓库原始简介；没有对每张卡重试，省下约 "
+            f"{total_cards * 3} 次无意义的模型调用。",
+        )
+        log(f"⚠️  {report.degraded}：整批退化成原始简介，等修复后再补发")
 
     result = render_messages(day, cards, notes=notes)
     report.messages = len(result.messages)
@@ -268,16 +313,33 @@ def run_daily(
     report.pushed = pushed
     report.push_error = push_error
 
+    pushed_ok = push_error is None and pushed == len(result.messages) and pushed > 0
+    if pushed_ok and report.alert and notifier is not None:
+        try:
+            notifier.send_markdown(report.alert)
+            log("📣 已推送告警消息（原因见上）")
+        except Exception as e:  # noqa: BLE001 - 告警发不出去不能盖掉主流程结果
+            log(f"⚠️  告警消息没发出去：{e}")
+
+    if pushed_ok and not dry_run:
+        state_dir = Path(state_path).parent
+        monitor.write_heartbeat(state_dir, day, pushed, total_ok, degraded=bool(report.degraded))
+        ok, detail = monitor.ping()
+        report.heartbeat = "sent" if ok and not detail.startswith("skipped") else ("skipped" if ok else f"failed: {detail}")
+        log(f"心跳        : {report.heartbeat}（{detail}）")
+
     if not dry_run:
         for _column_id, _name, pairs in cards:
             for cand, _card in pairs:
                 sent[cand.full_name] = day
         doc["sent"] = sent
         doc.setdefault("runs", {})[day] = {
-            "pushed": push_error is None and pushed == len(result.messages) and pushed > 0,
+            "pushed": pushed_ok,
             "messages": pushed,
             "cards": total_ok,
             "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "degraded": bool(report.degraded),
+            "heartbeat": report.heartbeat,
             "columns": {c.column_id: {"kept": c.kept, "target": c.target, "shortfall": c.shortfall} for c in runs},
         }
         save_state_doc(state_path, doc)

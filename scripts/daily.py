@@ -1,8 +1,10 @@
-"""M4：每日速递入口（采集 → 摘要 → 渲染 → 推送 → 写状态）。
+"""M4/M5：每日速递入口（采集 → 摘要 → 渲染 → 推送 → 写状态 → 心跳）。
 
 用法：
   python scripts/daily.py --dry-run          # 全流程但不推送、不写状态
-  python scripts/daily.py                    # 真跑：推送 + 写 state/sent.json
+  python scripts/daily.py                    # 真跑：推送 + 写 state/sent.json + 发心跳
+  python scripts/daily.py --backup           # 备用 cron：今天推过就秒退，没推过才补跑
+  python scripts/daily.py --status           # 只看今天的状态与心跳，不跑流程
   python scripts/daily.py --force            # 今天已经推过也再推一次（排障用）
 
 退出码：0 成功（含「今天已推过，秒退」）／2 配置或输入错误／3 全部栏目采集失败／5 推送失败。
@@ -25,6 +27,8 @@ from digest.github import GitHubClient  # noqa: E402
 from digest.notifiers import NotifierError, WeComNotifier  # noqa: E402
 from digest.summarizer.deepseek import DeepSeekClient  # noqa: E402
 from digest.summarizer.offline import OfflineClient  # noqa: E402
+from digest import monitor  # noqa: E402
+from digest.state import already_pushed, load_state_doc  # noqa: E402
 
 EXIT_OK = 0
 EXIT_INPUT = 2
@@ -54,6 +58,9 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     p.add_argument("--webhook", default="", help="覆盖 WECOM_WEBHOOK_URL（排障用）")
     p.add_argument("--columns", default="", help="只跑指定栏目（逗号分隔，验收/补跑用）")
     p.add_argument("--require-push", action="store_true", help="要求至少推送成功 1 条，否则退出 5")
+    p.add_argument("--backup", action="store_true", help="备用 cron 模式：今天推过就秒退，没推过才补跑")
+    p.add_argument("--status", action="store_true", help="只打印今天的状态与心跳，不跑流程")
+    p.add_argument("--stale-demo", action="store_true", help="演示心跳漏报时的告警文案（不联网、不跑流程）")
     return p.parse_args(argv)
 
 
@@ -67,6 +74,34 @@ def main(argv: Sequence[str] | None = None) -> int:
     except ConfigError as e:
         print(f"❌ 配置有问题：{e}")
         return EXIT_INPUT
+
+    if args.status:
+        doc = load_state_doc(args.state)
+        hb = monitor.read_heartbeat(Path(args.state).parent)
+        today = day
+        run = doc.get("runs", {}).get(today, {})
+        print(f"日期        : {today}")
+        print(f"今天推送过  : {'是' if already_pushed(doc, today) else '否'}")
+        print(f"runs 记录   : {run or '（无）'}")
+        print(f"心跳        : {hb or '（没有 heartbeat.json）'}")
+        print(f"心跳地址    : {'已配置' if monitor.heartbeat_url() else '未配置（跳过外发）'}")
+        return EXIT_OK
+
+    if args.stale_demo:
+        hb = monitor.read_heartbeat(Path(args.state).parent)
+        print(monitor.stale_alert(day, hb))
+        return EXIT_OK
+
+    if args.backup:
+        doc = load_state_doc(args.state)
+        if already_pushed(doc, day):
+            print(f"⏭️  备用 cron：{day} 已经推送过，秒退（不重复推送）")
+            return EXIT_OK
+        hb = monitor.read_heartbeat(Path(args.state).parent)
+        if hb.get("date") != day:
+            print(f"⚠️  备用 cron：{day} 还没有成功心跳（最近 {hb.get('date') or '无记录'}），本次补跑")
+        else:
+            print(f"⚠️  备用 cron：有今天的 {day} 心跳但 runs 没记推送成功，本次补跑")
 
     if args.offline:
         client = OfflineClient()
@@ -89,7 +124,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return EXIT_INPUT
 
     print("=" * 64)
-    print("每日开源速递 · M4")
+    print("每日开源速递 · M5")
     print("=" * 64)
     print(f"模型        : {source}")
     print(f"配置        : {args.config}（{len(config.enabled_columns)} 个启用栏目）")
