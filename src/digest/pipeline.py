@@ -18,7 +18,7 @@ from typing import Any, Callable
 from .collectors import search, trending
 from .collectors.base import CollectorError
 from .config import ColumnCfg, Config
-from .filters import REASON_STALE, describe_reason
+from .filters import REASON_DUPLICATE, REASON_STALE, describe_reason
 from .github import GitHubClient, GitHubError
 from .models import Candidate
 from .readme import fetch_readme
@@ -105,6 +105,7 @@ def run_column(
         "shortfall": 0,
         "enrich_failed": 0,
         "readme_missing": 0,
+        "similar_dropped": 0,
         "dropped": {},
         "readme_source": {"raw": 0, "api": 0, "missing": 0},
     }
@@ -162,6 +163,12 @@ def run_column(
         qualified.append(c)
 
     stats["qualified"] = len(qualified)
+
+    # 同批近似重复只留第一条（对方：批量注册的刷量仓库，简介逐字复制）
+    qualified, similar = filters.dedupe_similar(qualified)
+    for _ in similar:
+        _bump(stats, REASON_DUPLICATE)
+    stats["similar_dropped"] = len(similar)
 
     # 第 5 步：去重 + 补位
     days = column.dedupe_days if column.dedupe_days is not None else config.global_cfg.dedupe_days

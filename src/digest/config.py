@@ -61,6 +61,7 @@ class FiltersCfg(_Strict):
     require_description: bool = True
     require_language: bool = True
     max_star_fork_ratio: float = Field(20.0, gt=0)
+    duplicate_similarity: float = Field(0.9, ge=0.0, le=1.0)
 
 
 class ColumnCfg(_Strict):
@@ -134,6 +135,7 @@ class Config(_Strict):
             require_language=f.require_language,
             max_star_fork_ratio=f.max_star_fork_ratio,
             exclude_keywords=tuple(column.exclude_keywords),
+            duplicate_similarity=f.duplicate_similarity,
         )
 
 
@@ -184,7 +186,8 @@ def _friendly(error: dict[str, Any]) -> str:
             "global.llm": "provider, model, thinking, temperature, timeout_s, retry",
             "filters": (
                 "exclude_topics, exclude_name_patterns, min_readme_chars, "
-                "require_description, require_language, max_star_fork_ratio"
+                "require_description, require_language, max_star_fork_ratio, "
+                "duplicate_similarity"
             ),
         }.get(parent)
         hint = f"；{parent or '顶层'} 允许的项：{allowed}" if allowed else ""

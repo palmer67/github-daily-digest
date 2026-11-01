@@ -9,12 +9,23 @@ import json
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+try:  # 丢弃原因翻成中文，和采集日志保持一致
+    from digest.filters import describe_reason
+except Exception:  # pragma: no cover - 摘要脚本要能独立跑
+
+    def describe_reason(reason: str) -> str:  # type: ignore[misc]
+        return reason
+
 
 def _fmt_drop(stats: dict) -> str:
     dropped = stats.get("dropped") or {}
     if not dropped:
         return "—"
-    return "、".join(f"{k} {v}" for k, v in sorted(dropped.items(), key=lambda kv: -kv[1]))
+    return "、".join(
+        f"{describe_reason(k)} {v} 条" for k, v in sorted(dropped.items(), key=lambda kv: -kv[1])
+    )
 
 
 def render(data: dict) -> str:

@@ -31,6 +31,9 @@ filters:
   require_description: true
   require_language: true
   max_star_fork_ratio: 20   # star/fork > 20 视为 star 通胀
+  # 同批近似重复只留第一条：简介归一化后相似度 ≥ 0.9 判同（对方：批量注册的刷量仓库）
+  # 设 0 = 关闭这条规则
+  duplicate_similarity: 0.9
 
 columns:
   - id: trending
