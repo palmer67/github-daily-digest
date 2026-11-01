@@ -71,6 +71,22 @@ jobs:
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
           echo "本轮模式：$mode（schedule=$SCHEDULE）"
 
+      - name: 准备密钥（先落进环境，再让故障注入覆盖）
+        if: steps.mode.outputs.mode != 'stale'
+        shell: bash
+        env:
+          KEY_DEEPSEEK: ${{ secrets.DEEPSEEK_API_KEY }}
+          KEY_WECOM: ${{ secrets.WECOM_WEBHOOK_URL }}
+          KEY_HEARTBEAT: ${{ secrets.HEARTBEAT_URL }}
+        run: |
+          set -euo pipefail
+          {
+            echo "DEEPSEEK_API_KEY=${KEY_DEEPSEEK}"
+            echo "WECOM_WEBHOOK_URL=${KEY_WECOM}"
+            echo "HEARTBEAT_URL=${KEY_HEARTBEAT}"
+          } >> "$GITHUB_ENV"
+          echo "密钥已注入环境（值不会打印，注入故障的步骤会覆盖它们）"
+
       - name: 注入故障（仅故障演练）
         if: steps.mode.outputs.mode == 'badkey' || steps.mode.outputs.mode == 'badwebhook'
         shell: bash
@@ -103,9 +119,6 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          WECOM_WEBHOOK_URL: ${{ secrets.WECOM_WEBHOOK_URL }}
-          HEARTBEAT_URL: ${{ secrets.HEARTBEAT_URL }}
           COLUMNS: ${{ inputs.columns }}
           MODE: ${{ steps.mode.outputs.mode }}
         run: |
