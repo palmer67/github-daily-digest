@@ -1,0 +1,164 @@
+name: M4 每日速递（去重与状态）
+
+# 验收目标（策划书第 8 节 M4）：
+#   1) 连续两次运行，同一项目不重复推送
+#   2) 超过 7 天的项目可以再次出现
+#   3) 去重导致不足 5 条时自动补位
+#   4) 补不齐时消息里如实标注「今日仅 N 条」
+#   5) 状态文件自动提交且 commit 成功
+
+on:
+  workflow_dispatch:
+    inputs:
+      columns:
+        description: "只跑这些栏目（逗号分隔，留空=全部启用栏目）"
+        required: false
+        default: "freebies"
+      push:
+        description: "true=真推送到企业微信；false=只演练"
+        required: false
+        default: "true"
+
+permissions:
+  contents: write      # M4 验收要求：状态文件自动提交
+
+concurrency:
+  group: m4-daily
+  cancel-in-progress: false
+
+jobs:
+  unit-tests:
+    name: 单元测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: 装依赖
+        run: python -m pip install -r requirements.txt
+      - name: 跑单测
+        run: python -m unittest discover -s tests -t tests -v
+
+  daily:
+    name: 每日速递 dry-run / 真跑
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      WECOM_WEBHOOK_URL: ${{ secrets.WECOM_WEBHOOK_URL }}
+      PUSH_INPUT: ${{ inputs.push }}
+      COLUMNS: ${{ inputs.columns }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: 装依赖
+        run: python -m pip install -r requirements.txt
+      - name: 配 git 身份（要自动提交状态文件）
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: 第一次运行（采集 + 摘要 + 推送 + 写状态）
+        id: run1
+        run: |
+          set -o pipefail
+          set +e
+          if [ "$PUSH_INPUT" = "true" ]; then EXTRA=""; else EXTRA="--dry-run"; fi
+          python scripts/daily.py --columns "$COLUMNS" $EXTRA 2>&1 | tee run1.log
+          code=${PIPESTATUS[0]}
+          echo "RUN1_EXIT=$code" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: 提交状态文件（M4 验收第 5 条）
+        id: commit
+        if: env.PUSH_INPUT == 'true' && env.RUN1_EXIT == '0'
+        run: |
+          set +e
+          git add state/sent.json
+          if git diff --cached --quiet; then
+            echo "⚠️ 状态文件没有变化（可能今天已经跑过），本次不提交"
+          else
+            git commit -m "state: 每日速递推送记录（$(date +%F) 自动提交）"
+            git push
+          fi
+          echo "COMMIT_EXIT=$?" >> "$GITHUB_ENV"
+          git log -1 --name-only --pretty="%h %s" | tee commit.log
+
+      - name: 第二次运行（同一天，必须秒退、不重复推送）
+        id: run2
+        run: |
+          set -o pipefail
+          set +e
+          python scripts/daily.py --columns "$COLUMNS" 2>&1 | tee run2.log
+          code=${PIPESTATUS[0]}
+          echo "RUN2_EXIT=$code" >> "$GITHUB_ENV"
+          if grep -q "已经推送过" run2.log; then echo "RUN2_SKIPPED=1" >> "$GITHUB_ENV"; else echo "RUN2_SKIPPED=0" >> "$GITHUB_ENV"; fi
+          exit 0
+
+      - name: 第三天演练（只演练：看昨天推过的项目被去重、补位、如实标注）
+        id: run3
+        if: env.PUSH_INPUT == 'true'
+        run: |
+          set -o pipefail
+          set +e
+          TOMORROW=$(date -d "+1 day" +%F 2>/dev/null || date -v+1d +%F)
+          python scripts/daily.py --columns "$COLUMNS" --date "$TOMORROW" --dry-run 2>&1 | tee run3.log
+          code=${PIPESTATUS[0]}
+          echo "RUN3_EXIT=$code" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: 汇总到 job summary
+        if: always()
+        run: |
+          {
+            echo "## M4 去重与状态"
+            echo ""
+            echo "| 步骤 | 退出码 | 结果 |"
+            echo "| --- | --- | --- |"
+            echo "| 第一次运行 | ${RUN1_EXIT:-?} | $(grep -c 'errcode=0' run1.log 2>/dev/null || echo 0) 条消息推送成功 |"
+            echo "| 状态文件提交 | ${COMMIT_EXIT:-跳过} | $(grep -c 'state/sent.json' commit.log 2>/dev/null || echo 0) |"
+            echo "| 第二次运行（幂等） | ${RUN2_EXIT:-?} | skipped=${RUN2_SKIPPED:-?} |"
+            echo "| 第三天演练 | ${RUN3_EXIT:-跳过} | $(grep -c '今日仅' run3.log 2>/dev/null || echo 0) 处如实标注 |"
+            echo ""
+            echo "### 第一次运行日志"
+            echo '```'
+            sed -n '1,80p' run1.log 2>/dev/null || true
+            echo '```'
+            echo "### 第二次运行日志（应当秒退）"
+            echo '```'
+            sed -n '1,20p' run2.log 2>/dev/null || true
+            echo '```'
+            echo "### 第三天演练日志（去重 + 补位 + 标注）"
+            echo '```'
+            sed -n '1,60p' run3.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 上传日志和状态
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: m4-daily-logs
+          path: |
+            run1.log
+            run2.log
+            run3.log
+            commit.log
+            state/sent.json
+          if-no-files-found: warn
+
+      - name: 判定
+        if: always()
+        run: |
+          test "${RUN1_EXIT:-1}" = "0" || { echo "❌ 第一次运行失败（${RUN1_EXIT:-未知}）"; exit 1; }
+          if [ "$PUSH_INPUT" = "true" ]; then
+            test "${COMMIT_EXIT:-1}" = "0" || { echo "❌ 状态文件提交失败（${COMMIT_EXIT:-未知}）"; exit 1; }
+            test "${RUN2_EXIT:-1}" = "0" || { echo "❌ 第二次运行没有干净退出"; exit 1; }
+            test "${RUN2_SKIPPED:-0}" = "1" || { echo "❌ 第二次运行没有秒退，可能重复推送了"; exit 1; }
+            test "${RUN3_EXIT:-1}" = "0" || { echo "❌ 第三天演练失败"; exit 1; }
+          fi
+          echo "✅ M4 验收通过"

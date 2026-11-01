@@ -102,3 +102,48 @@ def dump_state(sent: dict[str, str]) -> str:
         ensure_ascii=False,
         indent=2,
     )
+
+
+# ---------- 扩展状态（M4）：带每日运行记录，用来做幂等 ----------
+
+
+def load_state_doc(path: str | Path) -> dict:
+    """读完整状态文件：{"version":1,"sent":{...},"runs":{...}}。
+
+    老文件只有 sent 也照读；文件坏掉直接抛错，不静默吞掉（否则去重会失效）。
+    """
+    p = Path(path)
+    if not p.exists():
+        return {"version": STATE_VERSION, "sent": {}, "runs": {}}
+    raw = json.loads(p.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError(f"状态文件格式错误：{p} 顶层应为对象")
+    sent = raw.get("sent", raw if "runs" not in raw else {})
+    runs = raw.get("runs", {})
+    if not isinstance(sent, dict) or not isinstance(runs, dict):
+        raise ValueError(f"状态文件格式错误：{p} 的 sent / runs 应为对象")
+    return {
+        "version": int(raw.get("version", STATE_VERSION)),
+        "sent": {str(k): str(v) for k, v in sent.items()},
+        "runs": {str(k): dict(v) for k, v in runs.items()},
+    }
+
+
+def save_state_doc(path: str | Path, doc: dict) -> None:
+    """原子写：先写临时文件再 replace，避免 Actions 中途被杀留下半个 JSON。"""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "version": STATE_VERSION,
+        "sent": dict(sorted(doc.get("sent", {}).items())),
+        "runs": {k: doc["runs"][k] for k in sorted(doc.get("runs", {}))},
+    }
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(p)
+
+
+def already_pushed(doc: dict, day: str) -> bool:
+    """今天是不是已经推过了（备用 cron 秒退靠这个）。"""
+    run = doc.get("runs", {}).get(day) or {}
+    return bool(run.get("pushed"))

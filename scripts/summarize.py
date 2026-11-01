@@ -36,6 +36,7 @@ from digest.summarizer import (  # noqa: E402
     summarize,
     unspecified_fields,
 )
+from digest.summarizer.offline import OfflineClient  # noqa: E402
 from digest.summarizer.schema import CostInfo, unspecified_rate  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -116,31 +117,9 @@ def _round_robin(pairs: list[tuple[str, Candidate]], limit: int) -> list[tuple[s
     return out
 
 
-class _OfflineClient(DeepSeekClient):
-    """离线桩：不发网络请求，按简介拼一张卡，专门验管道和渲染。"""
-
-    def __init__(self) -> None:  # noqa: D107
-        super().__init__(api_key="offline", transport=lambda *a, **k: (200, "{}"))
-
-    def chat_json(self, system: str, user: str) -> dict[str, Any]:
-        self.calls += 1
-        self.usage["prompt_tokens"] += len(system + user) // 4
-        self.usage["completion_tokens"] += 90
-        repo = user.split("仓库：", 1)[1].split("\n", 1)[0]
-        desc = user.split("简介：", 1)[1].split("\n", 1)[0]
-        return {
-            "what": desc[:60] or f"{repo} 是一个开源项目",
-            "value": "离线模式占位：真实卡片由 DeepSeek 生成",
-            "cost": {"price": "免费", "needs_api_key": False, "needs_server": False, "needs_gpu": False},
-            "difficulty": 2,
-            "pitfall": "",
-            "cost_basis": "",
-        }
-
-
 def _client(offline: bool) -> DeepSeekClient:
     if offline:
-        return _OfflineClient()
+        return OfflineClient()
     key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
     if not key:
         raise SystemExit("❌ 没有 DEEPSEEK_API_KEY 环境变量（真实跑需要，--offline 可跳过模型）")

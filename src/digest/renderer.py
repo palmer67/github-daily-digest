@@ -117,11 +117,15 @@ def render_messages(
     date: str,
     columns: list[tuple[str, str, list[tuple[Candidate, Card]]]],
     limit_bytes: int = 4000,
+    notes: dict[str, str] | None = None,
 ) -> RenderResult:
     """把「栏目 → 卡片列表」渲染成若干条消息。
 
     columns 里每项是 (栏目 id, 栏目显示名, [(候选, 卡片), ...])。
+    notes 是栏目级备注（例如去重后补不齐时的「今日仅 3 条」），拼在标题后面，
+    只拼在该栏目的第一段上，免得续段标题也被拉长。
     """
+    notes = notes or {}
     result = RenderResult()
     budget = limit_bytes - HEADER_RESERVE
 
@@ -134,8 +138,11 @@ def render_messages(
         chunks = split_markdown(body, budget)
         total = len(chunks)
         for i, chunk in enumerate(chunks):
+            note = notes.get(column_id, "") if i == 0 else ""
+            if note:
+                note = f"　{note}"
             if i == 0:
-                head = f"## {column_name}（{date}）\n"
+                head = f"## {column_name}（{date}）{note}\n"
             else:
                 head = f"## {column_name}（续 {i + 1}/{total}）\n"
             text = head + chunk
