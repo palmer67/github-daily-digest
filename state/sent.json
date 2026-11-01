@@ -1,5 +1,25 @@
 {
   "version": 1,
-  "sent": {},
-  "runs": {}
+  "sent": {
+    "Defiabell/shotsync": "2026-11-01",
+    "The-PR-Agent/pr-agent": "2026-11-01",
+    "antongulin/robin": "2026-11-01",
+    "apimartntu3sj4aj/ai-api-gateway-free-tier-ja": "2026-11-01",
+    "lucasforster1108-boop/oracle-snatch": "2026-11-01"
+  },
+  "runs": {
+    "2026-11-01": {
+      "pushed": true,
+      "messages": 1,
+      "cards": 5,
+      "at": "2026-11-01T14:28:09+0000",
+      "columns": {
+        "freebies": {
+          "kept": 5,
+          "target": 5,
+          "shortfall": 0
+        }
+      }
+    }
+  }
 }
