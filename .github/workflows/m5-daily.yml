@@ -213,7 +213,9 @@ jobs:
               if grep -q "心跳        : sent" daily.log; then
                 echo "❌ 推送失败时不允许发心跳"; exit 1
               fi
-              echo "✅ 失效 webhook：任务判失败、心跳未发送"
+              echo "✅ 失效 webhook：判失败、心跳未发送（这一步故意 exit 1，让整个 job 红）"
+              # 失败就是失败：job 必须红，不能只打印一句话然后绿着走
+              exit 1
               ;;
             backup)
               test "${DAILY_EXIT}" = "0"
