@@ -116,8 +116,9 @@ jobs:
           case "$MODE" in
             backup) args+=(--backup) ;;
             badkey|badwebhook)
-              # 故障演练不碰真实日期：用远期日期 + --force，且后面不提交状态
-              args+=(--force --date 2026-12-31)
+              # 故障演练不碰今天的真实记录：用明天 + --force，且后面不提交状态
+              # （不能用远期日期：栏目有 window_days，太远会把候选全判成 stale）
+              args+=(--force --date "$(date -d tomorrow +%F)")
               ;;
           esac
           echo "命令：python scripts/daily.py ${args[*]}"
