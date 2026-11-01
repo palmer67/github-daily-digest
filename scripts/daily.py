@@ -53,7 +53,6 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     p.add_argument("--state", default="state/sent.json")
     p.add_argument("--date", default="", help="默认今天（Asia/Shanghai，由 workflow 决定）")
     p.add_argument("--dry-run", action="store_true", help="不推送、不写状态")
-    p.add_argument("--force", action="store_true", help="今天已推过也再推一次")
     p.add_argument("--offline", action="store_true", help="用离线桩代替 DeepSeek，只验管道")
     p.add_argument("--webhook", default="", help="覆盖 WECOM_WEBHOOK_URL（排障用）")
     p.add_argument("--columns", default="", help="只跑指定栏目（逗号分隔，验收/补跑用）")
@@ -61,6 +60,8 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     p.add_argument("--backup", action="store_true", help="备用 cron 模式：今天推过就秒退，没推过才补跑")
     p.add_argument("--status", action="store_true", help="只打印今天的状态与心跳，不跑流程")
     p.add_argument("--stale-demo", action="store_true", help="演示心跳漏报时的告警文案（不联网、不跑流程）")
+    p.add_argument("--heartbeat-url", default="", help="覆盖 HEARTBEAT_URL（演示/排障用；正式请用 Secret）")
+    p.add_argument("--force", action="store_true", help="今天已推过也再推一次")
     return p.parse_args(argv)
 
 
@@ -68,6 +69,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     _safe_stdout()
     args = _parse_args(argv)
     day = args.date or date.today().isoformat()
+    if args.heartbeat_url:
+        os.environ["HEARTBEAT_URL"] = args.heartbeat_url
 
     try:
         config = load_config(args.config)

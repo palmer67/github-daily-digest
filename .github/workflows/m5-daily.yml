@@ -18,6 +18,14 @@ on:
       columns:
         description: '只跑指定栏目（逗号分隔，留空=全部）'
         default: ''
+      force:
+        description: '今天已推过也再推一次（补发/演练用）'
+        type: choice
+        options: ['no', 'yes']
+        default: 'no'
+      heartbeat_url:
+        description: '（可选）覆盖 HEARTBEAT_URL，只用于演练心跳'
+        default: ''
 
 permissions:
   contents: write
@@ -120,12 +128,16 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           COLUMNS: ${{ inputs.columns }}
+          FORCE: ${{ inputs.force }}
+          HB_URL: ${{ inputs.heartbeat_url }}
           MODE: ${{ steps.mode.outputs.mode }}
         run: |
           set -o pipefail
           set +e
           args=()
           [ -n "${COLUMNS:-}" ] && args+=(--columns "$COLUMNS")
+          [ "${FORCE:-no}" = "yes" ] && args+=(--force)
+          [ -n "${HB_URL:-}" ] && args+=(--heartbeat-url "$HB_URL")
           case "$MODE" in
             backup) args+=(--backup) ;;
             badkey|badwebhook)
