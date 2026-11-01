@@ -41,13 +41,16 @@ class ColumnRun:
     error: str | None = None
     cards_ok: int = 0
     cards_total: int = 0
+    deduped: int = 0
+    backfilled: int = 0
     seconds: float = 0.0
 
     @property
     def headline(self) -> str:
         if self.error:
             return f"{self.column_name}：采集失败（{self.error}）"
-        return f"{self.column_name}：{self.kept}/{self.target} 条{('　' + self.note) if self.note else ''}"
+        extra = f"（去重 {self.deduped}、顺延补位 {self.backfilled}）" if (self.deduped or self.backfilled) else ""
+        return f"{self.column_name}：{self.kept}/{self.target} 条{extra}{('　' + self.note) if self.note else ''}"
 
 
 @dataclass
@@ -93,6 +96,8 @@ class DailyReport:
                     "kept": c.kept,
                     "target": c.target,
                     "shortfall": c.shortfall,
+                    "deduped": c.deduped,
+                    "backfilled": c.backfilled,
                     "note": c.note,
                     "error": c.error,
                     "cards_ok": c.cards_ok,
@@ -143,6 +148,8 @@ def build_columns(day: str, config: Config, gh: GitHubClient, sent: dict[str, st
             shortfall=result.shortfall,
             note=_shortfall_note(len(result.items), need),
             error=result.error,
+            deduped=int(result.stats.get("deduped", 0)),
+            backfilled=int(result.stats.get("backfilled", 0)),
             seconds=elapsed,
         )
         runs.append(run)

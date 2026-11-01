@@ -111,6 +111,18 @@ jobs:
           echo "RUN3_EXIT=$code" >> "$GITHUB_ENV"
           exit 0
 
+      - name: 第十天演练（超过 7 天的项目应该能再次出现）
+        id: run4
+        if: env.PUSH_INPUT == 'true'
+        run: |
+          set -o pipefail
+          set +e
+          LATER=$(date -d "+9 day" +%F 2>/dev/null || date -v+9d +%F)
+          python scripts/daily.py --columns "$COLUMNS" --date "$LATER" --dry-run 2>&1 | tee run4.log
+          code=${PIPESTATUS[0]}
+          echo "RUN4_EXIT=$code" >> "$GITHUB_ENV"
+          exit 0
+
       - name: 汇总到 job summary
         if: always()
         run: |
@@ -123,6 +135,7 @@ jobs:
             echo "| 状态文件提交 | ${COMMIT_EXIT:-跳过} | $(grep -c 'state/sent.json' commit.log 2>/dev/null || echo 0) |"
             echo "| 第二次运行（幂等） | ${RUN2_EXIT:-?} | skipped=${RUN2_SKIPPED:-?} |"
             echo "| 第三天演练 | ${RUN3_EXIT:-跳过} | $(grep -c '今日仅' run3.log 2>/dev/null || echo 0) 处如实标注 |"
+            echo "| 第十天演练（7 天窗口外） | ${RUN4_EXIT:-跳过} | 去重应归零 |"
             echo ""
             echo "### 第一次运行日志"
             echo '```'
@@ -131,6 +144,10 @@ jobs:
             echo "### 第二次运行日志（应当秒退）"
             echo '```'
             sed -n '1,20p' run2.log 2>/dev/null || true
+            echo '```'
+            echo "### 第十天演练日志（超过 7 天，项目应能再次出现）"
+            echo '```'
+            sed -n '1,30p' run4.log 2>/dev/null || true
             echo '```'
             echo "### 第三天演练日志（去重 + 补位 + 标注）"
             echo '```'
@@ -147,6 +164,7 @@ jobs:
             run1.log
             run2.log
             run3.log
+            run4.log
             commit.log
             state/sent.json
           if-no-files-found: warn
@@ -160,5 +178,7 @@ jobs:
             test "${RUN2_EXIT:-1}" = "0" || { echo "❌ 第二次运行没有干净退出"; exit 1; }
             test "${RUN2_SKIPPED:-0}" = "1" || { echo "❌ 第二次运行没有秒退，可能重复推送了"; exit 1; }
             test "${RUN3_EXIT:-1}" = "0" || { echo "❌ 第三天演练失败"; exit 1; }
+            test "${RUN4_EXIT:-1}" = "0" || { echo "❌ 第十天演练失败"; exit 1; }
+            grep -q "去重 0" run4.log || { echo "❌ 7 天窗口外的项目没有被放回来（日志里没看到「去重 0」）"; exit 1; }
           fi
           echo "✅ M4 验收通过"
