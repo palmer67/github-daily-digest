@@ -19,13 +19,29 @@ UNSPECIFIED = "未说明"
 PRICES = ("免费", "部分免费", "付费", UNSPECIFIED)
 BoolOrUnknown = bool | Literal["未说明"]
 
-# 策划书 3.4 的白名单：README 命中这些词，就不许说「未说明」
-COST_EVIDENCE_RE = re.compile(
-    r"api[\s_-]?key|\btoken\b|\bapikey\b|\bdocker\b|pip install|npm (i|install)|"
-    r"\bcargo\b|\bCUDA\b|\bGPU\b|\bVRAM\b|pricing|\bprice\b|\bfree\b|\bpaid\b|"
-    r"\blicense\b|requirement|prerequisite|quick ?start|getting started",
-    re.IGNORECASE,
-)
+# 每个成本字段各自认哪些「线索词」。
+# 为什么要分开：早先所有字段共用一个正则，README 里出现 "license" 就让
+# needs_gpu 的「未说明」被判成偷懒，模型补不出来 → 整张卡降级。
+# 线索必须指向那个字段本身，才算「README 说了但你没读」。
+FIELD_EVIDENCE: dict[str, re.Pattern[str]] = {
+    "price": re.compile(
+        r"pricing|\bprice\b|\bfree\b|\bpaid\b|\blicense\b|subscription|收费|免费|付费|订阅",
+        re.IGNORECASE,
+    ),
+    "needs_api_key": re.compile(
+        r"api[\s_-]?key|apikey|api[\s_-]?token|access[\s_-]?token|\btoken\b|鉴权|密钥|令牌",
+        re.IGNORECASE,
+    ),
+    "needs_server": re.compile(
+        r"docker|docker-compose|self-host|selfhost|\bdeploy\b|\bserver\b|nginx|postgres|redis|supabase|\bhosted\b",
+        re.IGNORECASE,
+    ),
+    "needs_gpu": re.compile(
+        r"\bgpu\b|\bcuda\b|\bvram\b|nvidia|a100|h100|rtx|\b显存\b|显卡",
+        re.IGNORECASE,
+    ),
+}
+
 
 MAX_FIELD_CHARS = 120
 
@@ -78,13 +94,28 @@ def unspecified_fields(card: Card) -> list[str]:
     return out
 
 
+def field_evidence(readme_text: str) -> dict[str, list[str]]:
+    """逐个成本字段找线索：{"needs_gpu": ["cuda", "vram"], ...}（只含命中的字段）。"""
+    text = readme_text or ""
+    out: dict[str, list[str]] = {}
+    for field, pattern in FIELD_EVIDENCE.items():
+        hits: list[str] = []
+        for m in pattern.finditer(text):
+            word = m.group(0).strip().lower()
+            if word and word not in hits:
+                hits.append(word)
+        if hits:
+            out[field] = hits
+    return out
+
+
 def has_cost_evidence(readme_text: str) -> list[str]:
-    """README 里出现了哪些「成本线索」关键词（去重后返回）。"""
+    """README 里出现的所有成本线索词（去重后返回，给日志/测试用）。"""
     found: list[str] = []
-    for m in COST_EVIDENCE_RE.finditer(readme_text or ""):
-        word = m.group(0).lower()
-        if word not in found:
-            found.append(word)
+    for hits in field_evidence(readme_text).values():
+        for word in hits:
+            if word not in found:
+                found.append(word)
     return found
 
 
@@ -104,15 +135,15 @@ def validate(card: Card, readme_text: str) -> list[str]:
     if len(card.pitfall) > MAX_FIELD_CHARS:
         issues.append(f"pitfall 太长了（{len(card.pitfall)} 字），压到 60 字以内")
 
-    evidence = has_cost_evidence(readme_text)
-    unspecified = unspecified_fields(card)
-    if evidence and unspecified:
+    evidence = field_evidence(readme_text)
+    for field in unspecified_fields(card):
+        hits = evidence.get(field)
+        if not hits:
+            continue  # 白名单场景：README 没提这个字段，允许「未说明」
         issues.append(
-            f"README 里有成本线索（{'、'.join(evidence[:4])}），但 {'、'.join(unspecified)} 写了「未说明」；"
+            f"README 里提到了 {'、'.join(hits[:3])}，但 {field} 写了「未说明」；"
             "请据此给出具体判断，确实读不出来才保留「未说明」"
         )
-    if card.cost.price == UNSPECIFIED and not evidence:
-        pass  # 白名单场景，允许
     return issues
 
 

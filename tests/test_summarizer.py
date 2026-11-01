@@ -23,7 +23,13 @@ from digest.readme import trim_for_prompt
 from digest.summarizer import Card, DeepSeekClient, LLMAuthError, LLMFormatError, summarize
 from digest.summarizer import difficulty
 from digest.summarizer.deepseek import LLMTransientError
-from digest.summarizer.schema import CostInfo, fallback_card, unspecified_rate, validate
+from digest.summarizer.schema import (
+    CostInfo,
+    fallback_card,
+    field_evidence,
+    unspecified_rate,
+    validate,
+)
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "injected_readme.md"
 
@@ -110,7 +116,26 @@ class ValidateTest(unittest.TestCase):
         card = Card.model_validate(payload)
         self.assertEqual(validate(card, "This project has no configuration."), [])  # 白名单：没线索，允许
         issues = validate(card, "## Installation\npip install foo\n需要 API key")
-        self.assertTrue(any("成本线索" in i for i in issues))
+        self.assertTrue(any("needs_api_key" in i for i in issues))
+
+    def test_evidence_is_per_field(self) -> None:
+        """license 只证明 price，不该逼模型给 needs_gpu 交代（云端 4 张卡就这么降级的）。"""
+        payload = good_payload()
+        payload["cost"] = {"price": "免费", "needs_api_key": False, "needs_server": False, "needs_gpu": "未说明"}
+        card = Card.model_validate(payload)
+        self.assertEqual(validate(card, "MIT license. Just run it."), [])
+
+        card = Card.model_validate(payload)
+        issues = validate(card, "Requires CUDA and 24GB VRAM.")
+        self.assertTrue(any("needs_gpu" in i for i in issues))
+
+    def test_field_evidence_splits_fields(self) -> None:
+        found = field_evidence("MIT license. docker compose up. needs GPU for training. API key required.")
+        self.assertIn("price", found)
+        self.assertIn("needs_server", found)
+        self.assertIn("needs_gpu", found)
+        self.assertIn("needs_api_key", found)
+        self.assertNotIn("needs_gpu", field_evidence("pip install foo"))
 
     def test_unspecified_rate(self) -> None:
         c1 = Card.model_validate(good_payload())
