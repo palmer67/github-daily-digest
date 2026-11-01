@@ -123,6 +123,17 @@ jobs:
           echo "RUN4_EXIT=$code" >> "$GITHUB_ENV"
           exit 0
 
+      - name: 补不齐演练（受控实验：把候选池大部分标成已推，只留 2 条）
+        id: run5
+        if: env.PUSH_INPUT == 'true'
+        run: |
+          set -o pipefail
+          set +e
+          python scripts/shortfall_demo.py "$COLUMNS" 2>&1 | tee run5.log
+          code=${PIPESTATUS[0]}
+          echo "RUN5_EXIT=$code" >> "$GITHUB_ENV"
+          exit 0
+
       - name: 汇总到 job summary
         if: always()
         run: |
@@ -136,6 +147,7 @@ jobs:
             echo "| 第二次运行（幂等） | ${RUN2_EXIT:-?} | skipped=${RUN2_SKIPPED:-?} |"
             echo "| 第三天演练 | ${RUN3_EXIT:-跳过} | $(grep -c '今日仅' run3.log 2>/dev/null || echo 0) 处如实标注 |"
             echo "| 第十天演练（7 天窗口外） | ${RUN4_EXIT:-跳过} | 去重应归零 |"
+            echo "| 补不齐演练 | ${RUN5_EXIT:-跳过} | $(grep -o '今日仅 [0-9]* 条' run5.log 2>/dev/null | head -1) |"
             echo ""
             echo "### 第一次运行日志"
             echo '```'
@@ -148,6 +160,10 @@ jobs:
             echo "### 第十天演练日志（超过 7 天，项目应能再次出现）"
             echo '```'
             sed -n '1,30p' run4.log 2>/dev/null || true
+            echo '```'
+            echo "### 补不齐演练日志（必须出现「今日仅 N 条」）"
+            echo '```'
+            sed -n '1,20p' run5.log 2>/dev/null || true
             echo '```'
             echo "### 第三天演练日志（去重 + 补位 + 标注）"
             echo '```'
@@ -165,6 +181,7 @@ jobs:
             run2.log
             run3.log
             run4.log
+            run5.log
             commit.log
             state/sent.json
           if-no-files-found: warn
@@ -180,5 +197,7 @@ jobs:
             test "${RUN3_EXIT:-1}" = "0" || { echo "❌ 第三天演练失败"; exit 1; }
             test "${RUN4_EXIT:-1}" = "0" || { echo "❌ 第十天演练失败"; exit 1; }
             grep -q "去重 0" run4.log || { echo "❌ 7 天窗口外的项目没有被放回来（日志里没看到「去重 0」）"; exit 1; }
+            test "${RUN5_EXIT:-1}" = "0" || { echo "❌ 补不齐演练失败"; exit 1; }
+            grep -q "今日仅" run5.log || { echo "❌ 补不齐时没有如实标注"; exit 1; }
           fi
           echo "✅ M4 验收通过"
