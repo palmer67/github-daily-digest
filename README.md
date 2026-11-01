@@ -463,6 +463,7 @@ scripts/step_summary.py                 生成 Step Summary 表格
 scripts/m0_probe.py                     M0 五项检查
 state/heartbeat.json                    最近一次成功推送的心跳（程序自动提交）
 tests/                                  154 个单测（M1 75 + M2 33 + M3 19 + M4 16 + M5 11）
+docs/面试讲解稿.md                      一页面试讲解（项目价值 / 技术难点 / 容错设计）
 probe/                                  本机实测用的原始探针（参考实现，不参与 Actions）
 审核报告.md                             策划书 v1.1 的实测审核报告
 ```
