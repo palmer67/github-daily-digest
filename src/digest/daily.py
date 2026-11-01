@@ -49,7 +49,7 @@ class ColumnRun:
     def headline(self) -> str:
         if self.error:
             return f"{self.column_name}：采集失败（{self.error}）"
-        extra = f"（去重 {self.deduped}、顺延补位 {self.backfilled}）" if (self.deduped or self.backfilled) else ""
+        extra = f"（去重 {self.deduped}、顺延补位 {self.backfilled}）"
         return f"{self.column_name}：{self.kept}/{self.target} 条{extra}{('　' + self.note) if self.note else ''}"
 
 
