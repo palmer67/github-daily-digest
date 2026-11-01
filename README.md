@@ -2,7 +2,7 @@
 
 每天早上把 GitHub 上的热门与新兴开源项目，用通俗中文总结（是什么 / 有什么用 / 多少成本），按栏目推送到企业微信内部群。
 
-> 当前进度：**M0（云端连通性冒烟）**。M1 及以后按《项目策划书 v1.1》第 8 节逐项推进。
+> 当前进度：**M0 已通过（2026-11-01，GitHub Actions 云端 5/5）**，下一步 M1 采集层。M1 及以后按《项目策划书 v1.1》第 8 节逐项推进。
 
 ---
 
@@ -55,6 +55,20 @@
    ```
 
    GitHub 上这条消息之所以能进群，说明云端去企业微信的出口是通的；`errcode == 0` 才是判定依据，HTTP 200 不算。
+
+## M0 验收记录（2026-11-01，云端）
+
+首跑即通过：run [41312459131](https://github.com/palmer67/github-daily-digest/actions/runs/41312459131)，runner `ubuntu-26.04`（Azure westus2，美国机房）。
+
+| 检查 | 实测结果 |
+| --- | --- |
+| GitHub API | HTTP 200，core 配额 5000/5000，`GITHUB_TOKEN` 已认证 |
+| DeepSeek API | HTTP 200，717 ms；prompt 25 / completion 1 / total 26 tokens；`thinking=disabled` 被接受；`/models` 返回 `deepseek-flash`、`deepseek-v4-pro` |
+| 企业微信 webhook | HTTP 200，body `{"errcode":0,"errmsg":"ok"}`，**errcode == 0 → 判定成功** |
+| 故障注入 A：错误 webhook key | **HTTP 200 + `errcode 93000`**（与策划书 A-10 一致，证明只看状态码会误判成功） |
+| 故障注入 B：错误 DeepSeek key | **HTTP 401 `authentication_error`**（与 A-11 一致，证明 401 必须短路、不能重试） |
+
+日志锚点：`M0 RESULT: PASS (5/5)`。企业微信群已实收测试消息；日志与运行摘要里 webhook key、DeepSeek key 均被掩码，对仓库工作树的密钥扫描无命中。
 
 ## 密钥纪律
 
