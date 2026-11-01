@@ -37,7 +37,8 @@ flowchart TD
     S["抓原始候选<br/>trending 榜单页 / search API<br/>1 次请求"] --> F1["便宜过滤<br/>只用榜单自带字段<br/>无简介 / 无语言 / 清单仓库 / star÷fork>20 / 黑名单"]
     F1 --> SORT["按栏目规则排序"]
     SORT --> G["贵操作，逐个做<br/>/repos 补 topics → 拉 README → 长度≥500 字符"]
-    G --> D["去重<br/>7 天（热门栏目 2 天）内推过的剔掉"]
+    G --> D2["簇内去重<br/>同一批仓库简介几乎一字不差<br/>只留第一条"]
+    D2 --> D["去重<br/>7 天（热门栏目 2 天）内推过的剔掉"]
     D --> B["补位<br/>同一查询向下顺延第 6/7/8 名"]
     B --> R["最终 5 条<br/>凑不够就照实标缺口"]
 ```
@@ -46,10 +47,17 @@ flowchart TD
 
 ```text
 [freebies] 羊毛专区
-  60 条原始 → 过滤后 10 条 → 去重 0 条 → 最终 5 条（缺口 0，补位 0，17.7s）
-  丢弃：没有主语言 13 条 / 窗口期内没有活跃（pushed_at 太旧） 7 条 /
-        清单仓库（名字命中 awesome/-list/cheatsheet 等） 2 条 / star/fork 比过高，疑似 star 通胀 2 条
+  60 条原始 → 过滤后 10 条 → 去重 0 条 → 最终 5 条（缺口 0，补位 0，8.6s）
+  丢弃：没有主语言 13 条 / 窗口期内没有活跃（pushed_at 太旧） 6 条 /
+        同批近似重复（疑似同一批刷量仓库） 5 条 / 清单仓库（名字命中 awesome/-list/cheatsheet 等） 2 条 /
+        star/fork 比过高，疑似 star 通胀 2 条
 ```
+
+「同批近似重复」是踩过坑之后加的：羊毛专区按「最近更新」排序，曾一次性抓到 4 个 `apimart*` 仓库，
+简介逐字相同（`AI API gateway / relay: 307 models behind one OpenAI-compatible key…`）、star 都在 50–70，
+是同一批注册进来刷搜索排名的。规则把简介归一化（小写、去掉标点空格）后两两比：前缀 40 字符相同、
+或相似度 ≥ `filters.duplicate_similarity`（默认 0.9）就判定同簇，只留排序里的第一条。
+阈值写进 `config/columns.yaml`，设成 0 即关闭。
 
 ### 五个栏目
 
@@ -111,38 +119,39 @@ gh workflow run m1-collect.yml --ref main
 python -m unittest discover -s tests -t tests -v
 ```
 
-67 个用例，覆盖 M1 验收要求的四类：
+75 个用例，覆盖 M1 验收要求的四类：
 
 | 测试文件 | 覆盖 | 用例数 |
 | --- | --- | --- |
-| `tests/test_filters.py` | 6 条质量过滤规则 + 规则可关闭 | 18 |
+| `tests/test_filters.py` | 7 条质量过滤规则 + 同批近似重复去重 + 规则可关闭 | 26 |
 | `tests/test_state.py` | 去重窗口边界（6 天算 / 7 天不算）、补位、缺口不拿历史凑数 | 15 |
 | `tests/test_renderer.py` | 4000 字节切分、卡片边界不劈开、单卡超限独立成块 | 8 |
 | `tests/test_config.py` | 拼错字段/缺字段/取值越界/重复 id/栏目语义冲突，全部要求中文可读报错 | 17 |
 | `tests/test_collectors.py` | trending 正则钉死（页面改版必须炸，不许静默空栏目）、搜索日期占位符 | 9 |
 
-### 本地实测（2026-11-01，本机出口）
+### 云端实测（2026-11-01）
 
 | 栏目 | 原始 → 过滤后 → 最终 | 耗时 |
 | --- | --- | --- |
-| 今日热门 | 17 → 10 → 5 | 54.2s |
-| 新兴潜力 | 40 → 10 → 5 | 16.3s |
-| dsh 生态 | 40 → 10 → 5 | 18.2s |
-| 开源工作台 | 40 → 10 → 5 | 25.9s |
-| 羊毛专区 | 60 → 10 → 5 | 17.7s |
+| 今日热门 | 17 → 10 → 5 | 9.8s |
+| 新兴潜力 | 40 → 10 → 5 | 7.2s |
+| dsh 生态 | 40 → 10 → 5 | 7.2s |
+| 开源工作台 | 40 → 10 → 5 | 11.7s |
+| 羊毛专区 | 60 → 10 → 5 | 8.6s |
 
-合计 124 次 GitHub API 调用、132 秒。**本机结果不代表云端**（runner 在美国机房，实测快 4 倍：云端 34.2 秒 / 129 次调用）。
+合计 123 次 GitHub API 调用、44.5 秒。同一份代码在本机首轮 dry-run 是 124 次调用、132 秒——
+**本机结果不代表云端**，runner 在美国机房，访问 GitHub 快 3 倍。
 
 ### M1 云端验收（2026-11-01）
 
-run [41313505927](https://github.com/palmer67/github-daily-digest/actions/runs/41313505927)：单元测试 job 7 秒（`Ran 67 tests … OK`），采集 job 43 秒，两个 job 全绿，`COLLECT_EXIT: 0`。
+run [41314085578](https://github.com/palmer67/github-daily-digest/actions/runs/41314085578)：单元测试 job 9 秒（`Ran 75 tests … OK`），采集 job 54 秒，两个 job 全绿，`COLLECT_EXIT: 0`。
 
 | 验收项（策划书第 8 节） | 实测 |
 | --- | --- |
-| 5 个栏目各输出 ≥5 条候选（JSON） | 5 个栏目全部 `最终 5 条`，`build/candidates.json` 27,934 字节，已上传 artifact |
+| 5 个栏目各输出 ≥5 条候选（JSON） | 5 个栏目全部 `最终 5 条`，`build/candidates.json` 28,208 字节，已上传 artifact |
 | 配置缺字段/拼写错误启动时立刻报错 | 单测 17 条覆盖（拼错字段、缺字段、越界、重复 id、栏目语义冲突），报错为中文并指出正确写法 |
-| 质量过滤生效（清单仓库 / 无简介 / star÷fork>20） | 日志逐栏目列出丢弃原因与计数，例如热门栏 `没有简介 1 / 清单仓库 1 / 没有主语言 1` |
-| 核心逻辑单测（过滤 / 补位 / 切分各 ≥3 case） | 67 个用例：过滤 18、去重补位 15、切分 8、配置 17、解析 9 |
+| 质量过滤生效（清单仓库 / 无简介 / star÷fork>20） | 日志逐栏目列出丢弃原因与计数，例如热门栏 `没有简介 1 / 清单仓库 1 / 没有主语言 1`；羊毛专区另有 `同批近似重复 5 条`，5 条候选从 4 个 apimart 同款收敛成 1 个 |
+| 核心逻辑单测（过滤 / 补位 / 切分各 ≥3 case） | 75 个用例：过滤 26、去重补位 15、切分 8、配置 17、解析 9 |
 
 云端这次抓到的 25 条候选（节选）：
 
@@ -150,9 +159,12 @@ run [41313505927](https://github.com/palmer67/github-daily-digest/actions/runs/4
 | --- | --- | --- |
 | 今日热门 | `thedotmack/claude-mem` ⭐108.6k（今日 +1527） | 榜单 17 条里过滤掉 3 条 |
 | 新兴潜力 | `pengchujin/aerial-tv` ⭐8.6k | 40 条里 5 条因 star÷fork>20 被丢 |
-| dsh 生态 | `Voyager77Twt/dsh-folder-search` ⭐4 | 按最近更新排，新插件 star 都还是个位数 |
+| dsh 生态 | `zyydragon-sys/dsh-agi-federated` ⭐0 | 按最近更新排，新插件 star 都还是个位数 |
 | 开源工作台 | `ComposioHQ/composio` ⭐30.9k | 8 条因 30 天窗口不活跃被丢 |
-| 羊毛专区 | `Defiabell/shotsync` ⭐212 | 60 条里 13 条无主语言被丢 |
+| 羊毛专区 | `Defiabell/shotsync` ⭐212 | 60 条里 13 条无主语言、5 条同批近似重复被丢 |
+
+> dsh 生态栏目按「最近更新」排序，两次运行的榜首会变（上一次是 `Voyager77Twt/dsh-folder-search` ⭐4）；
+> 便宜过滤先只用手头字段，等每个候选真拉到 README 才判长度，所以「过滤后 10 条」不等于「最终一定有 5 条」。
 
 ---
 
@@ -185,7 +197,7 @@ config/columns.yaml                     栏目与全局配置（改这里就能�
 src/digest/                             M1 采集层
   config.py        YAML + pydantic 校验，错误翻成中文
   collectors/      trending 页面解析 / search API 采集
-  filters.py       6 条质量过滤规则（纯函数）
+  filters.py       7 条质量过滤规则 + 同批近似重复去重（纯函数）
   readme.py        README raw 优先、API 兜底
   state.py         去重窗口 + 补位（纯函数）
   renderer.py      按卡片边界切分（M3 会用）
@@ -194,7 +206,7 @@ src/digest/                             M1 采集层
 scripts/collect.py                      采集入口
 scripts/step_summary.py                 生成 Step Summary 表格
 scripts/m0_probe.py                     M0 五项检查
-tests/                                  67 个单测
+tests/                                  75 个单测
 probe/                                  本机实测用的原始探针（参考实现，不参与 Actions）
 审核报告.md                             策划书 v1.1 的实测审核报告
 ```
@@ -205,3 +217,7 @@ probe/                                  本机实测用的原始探针（参考�
 - Actions 里只用手动触发，定时任务留到 M5，避免没接 LLM 就每天往群里推半成品。
 - trending 靠 HTML 正则解析，是本期最大单点风险：解析到 0 条会直接抛错让 job 失败，不会静默推空栏目。
 - 企业微信外部群不支持群机器人，必须用**企业内部群**的机器人。
+- 「同批近似重复」只比简介文本，比的是**同一批刷量仓库**这种一字不差的情况；
+  真正的语义聚类（比如同一天冒出来的几个不同写法的同类项目）没做，按用户要求留在 M2 之后再看。
+- dsh 生态栏目按「最近更新」排序，会抓到 ⭐0 / ⭐1 的新插件（新插件本来就没 star）。
+  这是有意的取舍：按 star 排会被头部项目长期占位，压根看不到生态里新出现的东西。
