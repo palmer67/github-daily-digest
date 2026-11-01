@@ -2,19 +2,26 @@
   "version": 1,
   "sent": {
     "Defiabell/shotsync": "2026-11-01",
+    "Fei2411/DS-Bot": "2026-11-01",
+    "GooDAnDReaDY/dsh-russian-lang": "2026-11-01",
+    "LUgABeEEE/dsh-adapt-packs": "2026-11-01",
+    "Serenity-2026/dsh-treecom": "2026-11-01",
     "The-PR-Agent/pr-agent": "2026-11-01",
     "antongulin/robin": "2026-11-01",
     "apimartntu3sj4aj/ai-api-gateway-free-tier-ja": "2026-11-01",
-    "lucasforster1108-boop/oracle-snatch": "2026-11-01"
+    "lucasforster1108-boop/oracle-snatch": "2026-11-01",
+    "xingzhen199186/dsh-mini-remote": "2026-11-01"
   },
   "runs": {
     "2026-11-01": {
       "pushed": true,
       "messages": 1,
-      "cards": 5,
-      "at": "2026-11-01T14:28:09+0000",
+      "cards": 4,
+      "at": "2026-11-01T22:50:55+0800",
+      "degraded": false,
+      "heartbeat": "sent",
       "columns": {
-        "freebies": {
+        "dsh-ecosystem": {
           "kept": 5,
           "target": 5,
           "shortfall": 0
