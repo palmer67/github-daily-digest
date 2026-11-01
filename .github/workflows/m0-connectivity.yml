@@ -1,0 +1,55 @@
+name: M0 连通性冒烟
+
+# 只在手动触发时运行：M0 会真往企业微信群里发消息，不能在每次 push 时打扰。
+# 用法：Actions 页面点 “Run workflow”，或本地 `gh workflow run m0-connectivity.yml`
+
+on:
+  workflow_dispatch:
+    inputs:
+      note:
+        description: 本次运行说明（可留空，仅用于人工辨认）
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: m0-smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: GitHub API / DeepSeek / 企业微信 webhook
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 运行 M0 探针（三项连通 + 两项故障注入）
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          DEEPSEEK_MODEL: deepseek-flash
+          WECOM_WEBHOOK_URL: ${{ secrets.WECOM_WEBHOOK_URL }}
+        run: |
+          set -o pipefail
+          python scripts/m0_probe.py 2>&1 | tee m0-probe.log
+
+      - name: 把探针日志写进运行摘要（失败也写，便于查证）
+        if: always()
+        shell: bash
+        run: |
+          if [ -f m0-probe.log ]; then
+            {
+              echo "## M0 探针输出"
+              echo '```'
+              cat m0-probe.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
