@@ -1,0 +1,98 @@
+name: M2 摘要层
+
+# 手动触发。为什么不定时：M2 只到「生成卡片」，还没接推送（M3），
+# 现在每天跑一遍既浪费 DeepSeek 调用，也会在 Actions 里堆没用的运行记录。
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "生成多少张卡（默认 20，按栏目轮流取）"
+        default: "20"
+      columns:
+        description: "只跑这些栏目（逗号分隔，留空=全部）"
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  单元测试:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: 装依赖
+        run: python -m pip install -r requirements.txt
+      - name: 跑单测（含摘要层离线用例）
+        run: python -m unittest discover -s tests -t tests -v
+
+  摘要 dry-run:
+    needs: 单元测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: 装依赖
+        run: python -m pip install -r requirements.txt
+
+      - name: 采集候选（复用 M1）
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/collect.py --out build/candidates.json
+
+      - name: 生成卡片（DeepSeek）
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: |
+          set -o pipefail; set +e
+          python scripts/summarize.py \
+            --candidates build/candidates.json \
+            --limit "${{ inputs.limit }}" \
+            --columns "${{ inputs.columns }}" \
+            --md-out build/cards.md 2>&1 | tee summarize.log
+          code=${PIPESTATUS[0]}
+          echo "SUMMARIZE_EXIT=$code" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: 提示词注入测试（真实模型）
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: |
+          set -o pipefail; set +e
+          python scripts/summarize.py --injection-test 2>&1 | tee injection.log
+          code=${PIPESTATUS[0]}
+          echo "INJECTION_EXIT=$code" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: 写入运行摘要
+        if: always()
+        run: |
+          if [ -f build/cards.md ]; then cat build/cards.md >> "$GITHUB_STEP_SUMMARY"; fi
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "## 提示词注入测试" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          tail -8 injection.log >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo "（没有 injection.log）" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 上传产物
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: m2-cards
+          path: |
+            build/cards-*.json
+            build/candidates.json
+            build/cards.md
+            summarize.log
+            injection.log
+          if-no-files-found: warn
+
+      - name: 判定
+        run: |
+          echo "摘要退出码：${SUMMARIZE_EXIT:-missing}　注入测试退出码：${INJECTION_EXIT:-missing}"
+          test "${SUMMARIZE_EXIT:-1}" = "0"
+          test "${INJECTION_EXIT:-1}" = "0"
