@@ -133,10 +133,27 @@ def run_column(
         ordered.append(c)
     ordered = sort_candidates(ordered, column)
 
-    # 第 4 步：贵操作。多攒 need 条做补位储备（7.3 的「取第 6、7、8 名」）
-    target = need * 2
+    # 第 3 步：先做便宜的去重与近似去重，再去花 API 配额。
+    # 这样「今天已经推过的项目」不会白花 /repos 和 README 请求，
+    # 也让补位能真正往下顺延（原来先在 need*2 窗口里 enrich，窗口被去重打空就补不出东西）。
+    days = column.dedupe_days if column.dedupe_days is not None else config.global_cfg.dedupe_days
+    fresh_pool, deduped = apply_dedupe(ordered, sent, today, days)
+    stats["deduped"] = len(deduped)
+
+    fresh_pool, similar = filters.dedupe_similar(fresh_pool)
+    for _ in similar:
+        _bump(stats, REASON_DUPLICATE)
+    stats["similar_dropped"] = len(similar)
+
+    top_need = {c.full_name for c in fresh_pool[:need]}
+
+    # 第 4 步：贵操作（/repos 校正 + README 长度）。一直 enrich 到凑够 need 条合格候选，
+    # 最多多看 need*3 条，避免配额被单栏目吃光。
+    target = need * 3
     qualified: list[Candidate] = []
-    for c in ordered:
+    for c in fresh_pool:
+        if len(qualified) >= need:
+            break
         if len(qualified) >= target:
             break
         try:
@@ -164,24 +181,11 @@ def run_column(
 
     stats["qualified"] = len(qualified)
 
-    # 同批近似重复只留第一条（对方：批量注册的刷量仓库，简介逐字复制）
-    qualified, similar = filters.dedupe_similar(qualified)
-    for _ in similar:
-        _bump(stats, REASON_DUPLICATE)
-    stats["similar_dropped"] = len(similar)
-
-    # 第 5 步：去重 + 补位
-    days = column.dedupe_days if column.dedupe_days is not None else config.global_cfg.dedupe_days
-    fresh, deduped = apply_dedupe(qualified, sent, today, days)
-    stats["deduped"] = len(deduped)
-
-    if config.global_cfg.backfill:
-        kept, shortfall = backfill(fresh[:need], fresh[need:], need)
-    else:
-        kept, shortfall = fresh[:need], max(0, need - len(fresh[:need]))
-
+    # 第 5 步：截断到 need 条；来自 need 名以外的数量就是「顺延补位」。
+    kept = qualified[:need]
+    shortfall = max(0, need - len(kept))
     stats["kept"] = len(kept)
-    stats["backfilled"] = max(0, len(kept) - min(len(fresh[:need]), need))
+    stats["backfilled"] = sum(1 for c in kept if c.full_name not in top_need) if config.global_cfg.backfill else 0
     stats["shortfall"] = shortfall
     result.items = kept
     return result

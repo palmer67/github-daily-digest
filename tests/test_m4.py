@@ -222,3 +222,61 @@ class StateDocTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PipelineOrderTest(unittest.TestCase):
+    """去重要发生在花配额之前，否则窗口被去重打空就补不出东西（云端 run 41316291229 暴露的问题）。"""
+
+    def _run(self, sent: dict[str, str]):
+        from digest.config import load_config
+        from digest.pipeline import run_column
+
+        config = load_config(CONFIG)
+        column = config.columns_by_id()["freebies"]
+        pool = [make_cand(f"freebies/item{i}") for i in range(12)]
+        enriched: list[str] = []
+
+        def fake_enrich(client, cand):
+            enriched.append(cand.full_name)
+
+        with mock.patch("digest.pipeline.collect_raw", return_value=pool), \
+             mock.patch("digest.pipeline.enrich", side_effect=fake_enrich), \
+             mock.patch("digest.pipeline.fetch_readme", return_value=("README 正文" * 120, "raw:main/README.md")):
+            result = run_column(mock.Mock(), config, column, sent, date(2026, 11, 1), log=lambda *_: None)
+        return result, enriched
+
+    def test_deduped_items_skip_enrich(self):
+        sent = {f"freebies/item{i}": "2026-11-01" for i in range(7)}
+        result, enriched = self._run(sent)
+        self.assertEqual(len(result.items), 5, "去重 7 条后剩 5 条，正好补满")
+        self.assertEqual(result.stats["deduped"], 7)
+        self.assertEqual(result.stats["shortfall"], 0)
+        for i in range(7):
+            self.assertNotIn(f"freebies/item{i}", enriched, "已推过的项目不该再花 /repos 配额")
+
+    def test_backfills_when_front_items_fail_readme(self):
+        sent = {f"freebies/item{i}": "2026-11-01" for i in range(2)}
+        with mock.patch("digest.pipeline.fetch_readme", side_effect=lambda c, name: ("短" if name.endswith(("item2", "item3")) else "README 正文" * 120, "raw:main/README.md")):
+            from digest.config import load_config
+            from digest.pipeline import run_column
+
+            config = load_config(CONFIG)
+            column = config.columns_by_id()["freebies"]
+            pool = [make_cand(f"freebies/item{i}") for i in range(12)]
+            with mock.patch("digest.pipeline.collect_raw", return_value=pool),                  mock.patch("digest.pipeline.sort_candidates", side_effect=lambda items, column: items),                  mock.patch("digest.pipeline.enrich"):
+                result = run_column(mock.Mock(), config, column, sent, date(2026, 11, 1), log=lambda *_: None)
+        self.assertEqual(len(result.items), 5)
+        self.assertGreater(result.stats["backfilled"], 0, "前 5 名有两条 README 太短被丢，应该往下顺延补位")
+        self.assertEqual([c.full_name for c in result.items], [f"freebies/item{i}" for i in (4, 5, 6, 7, 8)])
+
+    def test_shortfall_when_pool_exhausted(self):
+        sent = {f"freebies/item{i}": "2026-11-01" for i in range(10)}
+        result, _ = self._run(sent)
+        self.assertEqual(len(result.items), 2)
+        self.assertEqual(result.stats["shortfall"], 3)
+
+    def test_window_expired_items_are_not_deduped(self):
+        sent = {f"freebies/item{i}": "2026-10-20" for i in range(5)}
+        result, _ = self._run(sent)
+        self.assertEqual(len(result.items), 5)
+        self.assertEqual(result.stats["deduped"], 0)
