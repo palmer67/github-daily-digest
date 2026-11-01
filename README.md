@@ -445,6 +445,74 @@ python scripts/daily.py --status      # 今天推过没有？心跳是什么时�
 
 日志锚点：`M0 RESULT: PASS (5/5)`。企业微信群已实收测试消息；日志与摘要里 webhook key、DeepSeek key 均被掩码。
 
+## 部署步骤（从零到每天自动推送，约 10 分钟）
+
+1. **建仓库**：新建一个仓库（公开/私有都行；公开仓库的 Actions 不计费），把本仓库代码推上去。
+2. **建企业微信群**：企业内部群 → 群设置 → 群机器人 → 添加 → 复制 Webhook 地址（注意：**外部群不支持机器人**）。
+3. **申请 DeepSeek Key**：platform.deepseek.com 创建 API Key（充值几块钱就够跑几个月）。
+4. **配 Secrets**：仓库 Settings → Secrets and variables → Actions → New repository secret，加三个：
+   `DEEPSEEK_API_KEY`、`WECOM_WEBHOOK_URL`，可选 `HEARTBEAT_URL`。`GITHUB_TOKEN` 由 Actions 自动注入，不用建。
+5. **跑一次冒烟**：Actions → `M0 连通性冒烟` → Run workflow，日志里要看到 `M0 RESULT: PASS (5/5)`。
+6. **跑一次真投递**：Actions → `每日速递 · 定时投递与监控` → Run workflow（mode 选 `happy`），
+   群里应收到 5 条栏目消息，`state/sent.json` 与 `state/heartbeat.json` 会被 bot 自动提交。
+7. **确认定时已生效**：Actions 列表里该 workflow 显示 active，每天 07:37（Asia/Shanghai）自动跑，08:22 有一次备用。
+
+只想要「本地试跑、不发群」：
+
+```bash
+python -m pip install -r requirements.txt
+export GITHUB_TOKEN=$(gh auth token)      # Windows: set GITHUB_TOKEN=...
+python scripts/collect.py                 # 只采集，输出 build/candidates-<date>.json
+python scripts/summarize.py --offline --limit 5   # 离线桩验证管道，不花钱
+python scripts/push.py --cards build/cards-<date>.json   # 只渲染，不发送
+```
+
+## 配置说明
+
+全部配置在 `config/columns.yaml`，改完直接提交，不用碰代码。
+
+| 字段 | 作用 | 备注 |
+| --- | --- | --- |
+| `global.items_per_column` | 每个栏目目标条数 | 默认 5 |
+| `global.dedupe_days` | 去重窗口 | 默认 7 天；榜单栏目可单独设 `dedupe_days: 2` |
+| `global.backfill` | 不足时是否顺延补位 | 关了就会出现「今日仅 N 条」 |
+| `global.max_message_bytes` | 单条消息字节上限 | 4000（企业微信硬上限 4096） |
+| `global.llm` | 模型、温度、超时、重试退避 | `deepseek-flash`、temperature 0.2、退避 1/4/12 秒 |
+| `filters.exclude_topics` / `exclude_name_patterns` | 清单仓库黑名单 | 命中即丢 |
+| `filters.duplicate_similarity` | 同批近似重复阈值 | 0.9；设 0 关闭 |
+| `columns[].enabled` | 是否启用该栏目 | `false` 会被完全跳过（连查询都不发） |
+| `columns[].query` | GitHub 搜索语法 | 支持 `{Nd}` 占位（会换成 N 天前的日期） |
+| `columns[].sort` | 排序方式 | `trending_order` / `stars` / `active_stars` / `updated` / `recent_activity` |
+| `columns[].exclude_keywords` | 栏目级黑名单 | 命中简介或名字即丢 |
+
+新增一个栏目只要加一段 YAML（校验很严：拼错字段、缺 query、重复 id 都会在**启动时**报中文错误）：
+
+```yaml
+  - id: rust
+    name: Rust 新项目
+    enabled: true
+    source: github_search
+    query: "language:rust stars:>100 created:>{30d}"
+    sort: stars
+    max_items: 5
+    window_days: 30
+```
+
+## 成本测算
+
+| 项目 | 用量 | 单价 | 每天 | 每月 |
+| --- | --- | --- | --- | --- |
+| DeepSeek 输入（未命中缓存） | 约 57k tokens | $0.15 / M | $0.0086 | — |
+| DeepSeek 输入（命中缓存） | 约 22k tokens | $0.003 / M | $0.0001 | — |
+| DeepSeek 输出 | 约 4.7k tokens | $0.60 / M | $0.0028 | — |
+| **合计** | 25 张卡 | — | **约 $0.008（≈ 0.06 元）** | **约 2.4 元** |
+| GitHub Actions | 每天 2 分钟 | 公开仓库免费 | 0 | 0 |
+| 服务器 | 0（纯 Actions） | — | 0 | 0 |
+
+想再省：`global.items_per_column: 3`（成本按条数线性下降）；或把 `columns` 里不关心的栏目 `enabled: false`。
+
+---
+
 ## 密钥纪律
 
 - 三个密钥只存在于 **GitHub Secrets** 和运行时的环境变量里，从不落进仓库文件。
@@ -495,14 +563,14 @@ probe/                                  本机实测用的原始探针（参考�
 审核报告.md                             策划书 v1.1 的实测审核报告
 ```
 
-## 已知限制（M1 – M5 阶段）
+## 已知限制（M1 – M7 阶段）
 
 - 定时任务已上（07:37 主跑 / 08:22 备用），但**真实到达时间还没观察够 14 天**（M6 在做）。
 - 外部心跳需要自己加 `HEARTBEAT_URL` Secret 才生效；没配时只有「心跳文件 + 仓库提交」这一层，收不到邮件告警。
 - 卡片质量靠「白名单 + 难度兜底 + 降级卡」三件套，没有人工复核环节；模型偶尔把次要功能写进「是什么」，
-  要等 M3 按真实推送效果再调提示词。
+  调提示词时用 workflow_dispatch 指定单栏目复跑，别一次改全量。
 - 摘要只读 README 头 3000 字 + 安装段 3000 字，超长 README 的中段（常见于 changelog）不参与判断。
-- 定时任务留到 M5；现在手动触发，避免调提示词期间每天往群里推半成品。
+- 调提示词期间建议先把 cron 停掉或改小栏目，避免每天往群里推半成品。
 - 企业微信单条上限 4096 字节，一张卡就快 3KB，所以「一个栏目一条消息」，栏目数多了会变成多条连发。
 - trending 靠 HTML 正则解析，是本期最大单点风险：解析到 0 条会直接抛错让 job 失败，不会静默推空栏目。
 - 企业微信外部群不支持群机器人，必须用**企业内部群**的机器人。
