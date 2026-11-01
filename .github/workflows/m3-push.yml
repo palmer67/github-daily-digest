@@ -1,0 +1,138 @@
+name: M3 渲染与推送
+
+# 手动触发。会真的往企业微信群发 5 条消息（每栏目一条），所以只在需要验收时跑。
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "生成多少张卡（默认 25，正好每栏目 5 条）"
+        default: "25"
+      send:
+        description: "是否真的推送到企业微信（默认 true）"
+        default: "true"
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    name: 单元测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: 装依赖
+        run: python -m pip install -r requirements.txt
+      - name: 跑单测（含渲染与 errcode 判定）
+        run: python -m unittest discover -s tests -t tests -v
+
+  render-and-push:
+    name: 渲染与推送
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: 装依赖
+        run: python -m pip install -r requirements.txt
+
+      - name: 采集候选
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/collect.py --out build/candidates.json
+
+      - name: 生成卡片
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: |
+          set -o pipefail; set +e
+          python scripts/summarize.py --candidates build/candidates.json --limit "${{ inputs.limit }}" \
+            --md-out build/cards.md 2>&1 | tee summarize.log
+          echo "SUMMARIZE_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: 渲染 dry-run（不发送，只看字节数）
+        run: |
+          set -o pipefail
+          python scripts/push.py --cards build/cards-*.json 2>&1 | tee render.log
+
+      - name: 超长拆分演示（故意造 5 张超长卡）
+        run: |
+          set -o pipefail; set +e
+          python scripts/push.py --split-demo 2>&1 | tee split.log
+          echo "SPLIT_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: 真发到企业微信
+        env:
+          WECOM_WEBHOOK_URL: ${{ secrets.WECOM_WEBHOOK_URL }}
+        run: |
+          set -o pipefail; set +e
+          python scripts/push.py --cards build/cards-*.json --send 2>&1 | tee send.log
+          echo "SEND_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: 故障注入（错误 webhook key 必须判失败）
+        run: |
+          set -o pipefail; set +e
+          python scripts/push.py --cards build/cards-*.json --send \
+            --webhook "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=00000000-0000-0000-0000-000000000000" \
+            2>&1 | tee badkey.log
+          echo "BADKEY_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: 写入运行摘要
+        if: always()
+        run: |
+          {
+            echo "## M3 渲染与推送"
+            echo ""
+            echo '### 分段结果（dry-run）'
+            echo '```'
+            tail -12 render.log 2>/dev/null || echo "（没有 render.log）"
+            echo '```'
+            echo '### 真实推送'
+            echo '```'
+            grep -E "开始推送|✅|❌|errcode" send.log 2>/dev/null | head -20 || echo "（没有 send.log）"
+            echo '```'
+            echo '### 故障注入（错误 key）'
+            echo '```'
+            tail -5 badkey.log 2>/dev/null || echo "（没有 badkey.log）"
+            echo '```'
+            echo '### 超长拆分'
+            echo '```'
+            grep -E "整段|✅ 拆分|❌" split.log 2>/dev/null || echo "（没有 split.log）"
+            echo '```'
+            echo "退出码：SUMMARIZE=${SUMMARIZE_EXIT:-?} SEND=${SEND_EXIT:-?} BADKEY=${BADKEY_EXIT:-?} SPLIT=${SPLIT_EXIT:-?}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 上传产物
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: m3-push
+          path: |
+            build/cards-*.json
+            build/candidates.json
+            summarize.log
+            render.log
+            split.log
+            send.log
+            badkey.log
+          if-no-files-found: warn
+
+      - name: 判定
+        run: |
+          echo "退出码：SUMMARIZE=${SUMMARIZE_EXIT:-?} SPLIT=${SPLIT_EXIT:-?} SEND=${SEND_EXIT:-?} BADKEY=${BADKEY_EXIT:-?}"
+          test "${SUMMARIZE_EXIT:-1}" = "0"
+          test "${SPLIT_EXIT:-1}" = "0"
+          test "${SEND_EXIT:-1}" = "0"
+          # 错误 key 必须被判失败（退出码 3），且日志里能看到 errcode 93000
+          test "${BADKEY_EXIT:-0}" = "3" || { echo "❌ 错误 webhook key 没有判定为失败（BADKEY_EXIT 应为 3）"; exit 1; }
+          grep -q "93000" badkey.log || { echo "❌ 日志里看不到 errcode 93000"; exit 1; }
+          grep -q "拆分只在卡片边界发生" split.log || { echo "❌ 拆分演示没通过"; exit 1; }
+          echo "✅ M3 通过：分段无超长、真实推送成功、错误 key 判定失败、超长按卡片边界拆分"
