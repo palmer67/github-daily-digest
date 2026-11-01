@@ -2,7 +2,7 @@
 
 每天早上把 GitHub 上的热门与新兴开源项目，用通俗中文总结（是什么 / 有什么用 / 多少成本），按栏目推送到企业微信内部群。
 
-> 当前进度：**M0 已通过（云端 5/5）→ M1 采集层已通过 → M2 摘要层已通过（云端 20 张卡全通过）**，下一步 M3 渲染层。后续按《项目策划书 v1.1》第 8 节逐项推进。
+> 当前进度：**M0 云端连通 → M1 采集层 → M2 摘要层 → M3 渲染与推送 → M4 去重与状态，全部云端验收通过**，下一步 M5 定时投递与监控。后续按《项目策划书 v1.1》第 8 节逐项推进。
 
 ## 整体架构（做到哪一步了）
 
@@ -10,7 +10,7 @@
 flowchart LR
     A["<b>M1 采集层</b><br/>5 个栏目<br/>抓取 + 质量过滤"] --> B["<b>M2 摘要层</b><br/>DeepSeek 生成卡片<br/>白名单 + README 裁剪"]
     B --> C["<b>M3 渲染层</b><br/>拼 markdown<br/>按 4096 字节切分"]
-    C --> D["<b>M4 状态层</b><br/>去重 / 补位<br/>state/sent.json"]
+    C --> D["<b>M4 状态层</b><br/>去重 / 补位<br/>幂等 / state/sent.json"]
     D --> E["<b>M5 定时投递</b><br/>cron 07:37<br/>企业微信群"]
     M0["M0 云端连通性<br/>GitHub / DeepSeek / 企业微信<br/>+ 故障注入"] -.->|"先把网络跑通"| A
 ```
@@ -20,9 +20,9 @@ flowchart LR
 | M0 | 云端连通性 + 两项故障注入 | ✅ 2026-11-01 通过（5/5） |
 | M1 | 采集层：5 栏目抓取、质量过滤、去重补位、配置校验、单测 | ✅ 2026-11-01 通过（云端 5/5 栏目达标） |
 | M2 | 摘要层：DeepSeek 卡片、难度信号兜底、白名单、注入测试 | ✅ 2026-11-01 通过（20/20 卡，难度 5 种） |
-| M3 | 渲染与切分 | 未开始 |
-| M4 | 状态与幂等 | 未开始 |
-| M5 | 定时投递与企业微信 | 未开始 |
+| M3 | 渲染与切分、企业微信推送、errcode 判定 | ✅ 2026-11-01 通过（云端 5 条全 errcode=0） |
+| M4 | 去重 / 补位 / 幂等 / 状态自动提交 | ✅ 2026-11-01 通过（5 项验收全过） |
+| M5 | 定时投递与监控 | 未开始 |
 
 ---
 
@@ -249,6 +249,102 @@ run [41315106513](https://github.com/palmer67/github-daily-digest/actions/runs/4
 > 根因是**所有字段共用一个线索正则**，`license` 不该逼模型交代显卡。改成每字段各认各的线索（`license` 只归 price，
 > `CUDA/vram` 才归 needs_gpu），顺手在提示词里写明「`pip install` 本地跑、全文没提 key → needs_api_key = false」，重跑即 20/20。
 
+---
+
+## M3 渲染与推送
+
+一张卡片固定五段，推给不写代码的同事也看得懂：
+
+```
+### 1. thedotmack/claude-mem　⭐108.6k · 今日 +1527 · TypeScript
+**是什么**：给 Claude Code 用的长期记忆插件，把每次会话里值得记的东西存下来。
+**价值**：不用每次重新交代背景，换会话还记得你的习惯和项目结构。
+**成本**：免费 · 不用 API Key · 不用起服务 · 不用显卡
+**坑**：装完要重启一次 Claude Code，否则看不到记忆面板。
+[👉 看项目](https://github.com/thedotmack/claude-mem)
+```
+
+- **一条消息 = 一个栏目**：标题写「## 栏目名（日期）」，下面按这个栏目的目标条数放卡片。
+- **4000 字节一段，按卡片边界切**：`split_markdown` 只在 `### ` 前面下刀，绝不把一张卡劈成两半；
+  真正发出去前再用 `--limit-bytes` 复核一次，超了会打 warning 而不是静默截断。
+- **企业微信只认 errcode**：HTTP 200 不算成功，`errcode == 0` 才算；`93000`（webhook 失效）和
+  `40058`（超过 4096 字节）立刻判失败不重试；`45009`（频率超限）等 60 秒再试一次。
+- **失败只写错误类型**：日志里 webhook 地址只显示 `key=1ac3***（36 字符）`，DeepSeek key 从不回显。
+
+### 怎么跑
+
+```bash
+# 只渲染不发（本地排查排版）
+python scripts/push.py --cards build/cards-2026-11-01.json
+
+# 真发到企业微信群
+python scripts/push.py --cards build/cards-2026-11-01.json --send
+
+# 超长消息拆分演练（造 5 张超长卡，验证不劈卡）
+python scripts/push.py --split-demo
+```
+
+退出码：0 成功 / 2 输入问题 / 3 推送失败（含 errcode 非 0）。
+
+### 云端验收（run [41315598916](https://github.com/palmer67/github-daily-digest/actions/runs/41315598916)）
+
+| 验收项 | 实测结果 |
+| --- | --- |
+| 企业微信实际收到分栏目消息 | **5 条全部 `errcode=0 errmsg=ok`**：今日热门 3090 / 新兴潜力 3206 / dsh 生态 3319 / 开源工作台 3072 / 羊毛专区 3232 字节 |
+| 没有超长截断 | 最长一条 3319 字节，低于 4000 字节预算，无 warning |
+| 超长消息按卡片边界拆 | 18699 字节的演练消息拆成 5 段（3771/3769/3769/3769/3769），每段恰好 1 张卡，日志 `✅ 拆分只在卡片边界发生` |
+| 错误 key 必须判失败 | 故意把 key 换成全 0：`errcode=93000 invalid webhook url`，job 判失败（`BADKEY=3`） |
+
+单测从 108 增到 **127**（M3 新增 19 条：格式化、卡片渲染、拆分不劈卡、errcode 判定、45009 重试、key 掩码）。
+
+---
+
+## M4 状态与幂等
+
+### 状态文件长什么样
+
+`state/sent.json` 由程序自动维护、自动提交，人不用改：
+
+```json
+{
+  "version": 1,
+  "sent": { "Defiabell/shotsync": "2026-11-01" },
+  "runs": {
+    "2026-11-01": {
+      "pushed": true,
+      "messages": 1,
+      "columns": { "freebies": { "kept": 5, "target": 5, "shortfall": 0 } }
+    }
+  }
+}
+```
+
+- `sent` 记「项目 → 最后一次推送日期」，7 天内（今日热门 2 天）不再出现；超过 7 天自动放回来。
+- `runs` 记「今天推过没有」，备用 cron 和手动补跑靠它**秒退**，不会同一天推两遍。
+
+### 三条规则
+
+1. **先去重、再花配额**：一开始写成「先 enrich 前 10 条、再去重」，结果今天推过的 5 条把窗口占满，
+   去重后一条不剩，云端直接出现「今日仅 0 条」。现在先去重，已推过的项目连 `/repos` 都不请求。
+2. **补位只往下顺延**：凑不够时用同一查询里排在后面的候选补，绝不拿历史内容凑数。
+3. **补不齐就照实说**：消息标题后面写「今日仅 N 条」，让读者知道今天是真的少，而不是程序漏了。
+
+### 云端验收（run [41317011045](https://github.com/palmer67/github-daily-digest/actions/runs/41317011045)）
+
+| 验收项 | 实测结果 |
+| --- | --- |
+| 连续两次运行不重复 | 第二次运行日志 `⏭️ 2026-11-01 已经推送过…`，`RUN2_SKIPPED=1`，一条消息都没发 |
+| 超过 7 天可再次出现 | 把日期推到第 10 天：`羊毛专区：5/5 条（去重 0、顺延补位 0）`，之前推过的项目重新出现 |
+| 去重不足 5 条时自动补位 | 第二天：`羊毛专区：5/5 条（去重 5、顺延补位 1）` |
+| 补不齐时如实标注 | 受控实验把池子 58/60 标成已推：消息头 `## 羊毛专区（2026-11-01）　今日仅 1 条`，缺口 4 |
+| 状态文件自动提交 | run [41316291229](https://github.com/palmer67/github-daily-digest/actions/runs/41316291229) 推送后自动提交 `state/sent.json`（commit `bf130a3`），`permissions: contents: write` 生效 |
+
+第一次真跑（同日）证据：1 条消息 3205 字节、`errcode=0`，推送后状态文件写入 5 条去重记录再由 bot 提交。
+
+单测从 127 增到 **143**（M4 新增 16 条：去重窗口、补位、如实标注、幂等秒退、dry-run 不写状态、状态文件原子读写）。
+
+---
+
 ## M0 验收记录（2026-11-01，云端）
 
 首跑即通过：run [41312459131](https://github.com/palmer67/github-daily-digest/actions/runs/41312459131)，runner `ubuntu-26.04`（Azure westus2）。
@@ -276,16 +372,22 @@ run [41315106513](https://github.com/palmer67/github-daily-digest/actions/runs/4
 .github/workflows/m0-connectivity.yml   M0 云端冒烟（仅手动触发）
 .github/workflows/m1-collect.yml        M1 单测 + 采集 dry-run（仅手动触发）
 .github/workflows/m2-summarize.yml      M2 单测 + 真实 DeepSeek 20 卡 + 注入测试（仅手动触发）
+.github/workflows/m3-push.yml           M3 单测 + 渲染 + 真发企业微信 + 拆分演练 + 错误 key 注入
+.github/workflows/m4-daily.yml          M4 单测 + 真跑一次 + 幂等秒退 + 第三天/第十天/补不齐演练
 config/columns.yaml                     栏目与全局配置（改这里就能加栏目）
+state/sent.json                         去重与运行记录（程序自动提交，人不用改）
 src/digest/                             M1 采集层
   config.py        YAML + pydantic 校验，错误翻成中文
   collectors/      trending 页面解析 / search API 采集
   filters.py       7 条质量过滤规则 + 同批近似重复去重（纯函数）
   readme.py        README raw 优先、API 兜底
   state.py         去重窗口 + 补位（纯函数）
-  renderer.py      按卡片边界切分（M3 会用）
-  pipeline.py      单栏目流水线
+  renderer.py      五段卡片 + 按卡片边界切分（4000 字节）
+  pipeline.py      单栏目流水线（先去重再 enrich，补位靠顺延）
+  daily.py         每日编排：采集 → 摘要 → 渲染 → 推送 → 写状态
   cli.py           命令行 + JSON 输出 + 退出码
+src/digest/notifiers/                   M3 推送层
+  wecom.py         企业微信群机器人（只认 errcode==0、93000/40058 致命、45009 退避）
 src/digest/summarizer/                  M2 摘要层
   prompt.py        系统提示词（固定前缀）+ 用户消息 + 纠正提示
   schema.py        卡片结构、逐字段线索校验、「未说明」统计
@@ -293,20 +395,24 @@ src/digest/summarizer/                  M2 摘要层
   deepseek.py      DeepSeek 客户端（401 不重试、429/5xx 退避）
 scripts/collect.py                      采集入口
 scripts/summarize.py                    摘要入口（含 --offline / --injection-test）
+scripts/push.py                         渲染与推送入口（--send / --split-demo）
+scripts/daily.py                        每日编排入口（--dry-run / --columns / --force）
+scripts/shortfall_demo.py               补不齐演练（受控实验，验证「今日仅 N 条」）
 scripts/step_summary.py                 生成 Step Summary 表格
 scripts/m0_probe.py                     M0 五项检查
-tests/                                  108 个单测（M1 75 + M2 33）
+tests/                                  143 个单测（M1 75 + M2 33 + M3 19 + M4 16）
 probe/                                  本机实测用的原始探针（参考实现，不参与 Actions）
 审核报告.md                             策划书 v1.1 的实测审核报告
 ```
 
-## 已知限制（M1 / M2 阶段）
+## 已知限制（M1 – M4 阶段）
 
-- 已经能采集 + 生成卡片，但**不渲染、不推送、不写状态**（`state/sent.json` M4 才落盘）。
+- 已经能采集 + 生成卡片 + 渲染 + 推送 + 记状态，但**还没有定时任务**：每天要在 Actions 里手动点一次（M5 才上 cron）。
 - 卡片质量靠「白名单 + 难度兜底 + 降级卡」三件套，没有人工复核环节；模型偶尔把次要功能写进「是什么」，
   要等 M3 按真实推送效果再调提示词。
 - 摘要只读 README 头 3000 字 + 安装段 3000 字，超长 README 的中段（常见于 changelog）不参与判断。
-- Actions 里只用手动触发，定时任务留到 M5，避免没接 LLM 就每天往群里推半成品。
+- 定时任务留到 M5；现在手动触发，避免调提示词期间每天往群里推半成品。
+- 企业微信单条上限 4096 字节，一张卡就快 3KB，所以「一个栏目一条消息」，栏目数多了会变成多条连发。
 - trending 靠 HTML 正则解析，是本期最大单点风险：解析到 0 条会直接抛错让 job 失败，不会静默推空栏目。
 - 企业微信外部群不支持群机器人，必须用**企业内部群**的机器人。
 - 「同批近似重复」只比简介文本，比的是**同一批刷量仓库**这种一字不差的情况；
