@@ -2,7 +2,7 @@
 
 每天早上把 GitHub 上的热门与新兴开源项目，用通俗中文总结（是什么 / 有什么用 / 多少成本），按栏目推送到企业微信内部群。
 
-> 当前进度：**M0 云端连通 → M1 采集层 → M2 摘要层 → M3 渲染与推送 → M4 去重与状态，全部云端验收通过**，下一步 M5 定时投递与监控。后续按《项目策划书 v1.1》第 8 节逐项推进。
+> 当前进度：**M0 云端连通 → M1 采集层 → M2 摘要层 → M3 渲染与推送 → M4 去重与状态 → M5 定时投递与监控，全部云端验收通过**，现在进入 M6 上线观察（连续 14 天）。后续按《项目策划书 v1.1》第 8 节逐项推进。
 
 ## 整体架构（做到哪一步了）
 
@@ -11,7 +11,7 @@ flowchart LR
     A["<b>M1 采集层</b><br/>5 个栏目<br/>抓取 + 质量过滤"] --> B["<b>M2 摘要层</b><br/>DeepSeek 生成卡片<br/>白名单 + README 裁剪"]
     B --> C["<b>M3 渲染层</b><br/>拼 markdown<br/>按 4096 字节切分"]
     C --> D["<b>M4 状态层</b><br/>去重 / 补位<br/>幂等 / state/sent.json"]
-    D --> E["<b>M5 定时投递</b><br/>cron 07:37<br/>企业微信群"]
+    D --> E["<b>M5 定时投递</b><br/>cron 07:37 / 08:22<br/>心跳 + 告警<br/>企业微信群"]
     M0["M0 云端连通性<br/>GitHub / DeepSeek / 企业微信<br/>+ 故障注入"] -.->|"先把网络跑通"| A
 ```
 
@@ -22,7 +22,8 @@ flowchart LR
 | M2 | 摘要层：DeepSeek 卡片、难度信号兜底、白名单、注入测试 | ✅ 2026-11-01 通过（20/20 卡，难度 5 种） |
 | M3 | 渲染与切分、企业微信推送、errcode 判定 | ✅ 2026-11-01 通过（云端 5 条全 errcode=0） |
 | M4 | 去重 / 补位 / 幂等 / 状态自动提交 | ✅ 2026-11-01 通过（5 项验收全过） |
-| M5 | 定时投递与监控 | 未开始 |
+| M5 | 定时投递、心跳、告警、备用 cron | ✅ 2026-11-01 通过（4 项故障注入全过） |
+| M6 | 上线观察 14 天 | 进行中（2026-11-02 起） |
 
 ---
 
@@ -345,6 +346,64 @@ python scripts/push.py --split-demo
 
 ---
 
+## M5 定时投递与监控
+
+### 什么时候跑
+
+| 轮次 | cron | 时区 | 行为 |
+| --- | --- | --- | --- |
+| 主跑 | `37 7 * * *` | Asia/Shanghai | 正常采集 → 摘要 → 推送 → 提交状态与心跳 |
+| 备用 | `22 8 * * *` | Asia/Shanghai | 先查「今天推过没有」：推过就**秒退**，没推过才补跑 |
+
+7:37 是故意躲开整点的：GitHub 官方文档说整点前后是排期高峰，负载高时**任务可能被丢弃**。
+所以主跑 + 备用两个 cron 用同一个 workflow，靠状态文件里的 `runs[今天].pushed` 做幂等判断。
+
+### 三道保险
+
+1. **状态文件**：每次成功都提交 `state/sent.json`，顺带满足「60 天无提交会被停用自动任务」的要求。
+   手动恢复方式：Actions → `每日速递 · 定时投递与监控` → `Run workflow`。
+2. **心跳文件**：推送确实成功（每条都 `errcode == 0` 且条数相符）之后才写 `state/heartbeat.json` 并提交。
+   推送失败时**一个字都不写**——这样「有没有心跳」就等于「有没有真的推出去」。
+3. **外部心跳（可选）**：配一个 `HEARTBEAT_URL` Secret（healthchecks.io、cron-job.org 之类），
+   成功后才 ping。企业微信本身挂了、或者 webhook 被停用时，告警发不出去，
+   外部服务会在约定时间没收到 ping 时给你发邮件——这是最后一道兜底。
+
+### 故障时会发生什么
+
+| 故障 | 程序行为 | 你能看到什么 |
+| --- | --- | --- |
+| DeepSeek Key 失效（401/402/403） | **整批**退化成「仓库原始简介」卡片，不逐张重试，附带一条告警消息 | 群里收到一条「⚠️ 每日开源速递告警」，日志 `DeepSeek 认证失败…整批退化成原始简介` |
+| webhook 失效（93000） | 立刻停推，任务判失败，**不写心跳** | Actions 变红 + GitHub 邮件；`state/heartbeat.json` 还是昨天的 |
+| 主跑被丢弃（压根没触发） | 备用 cron 到 8:22 发现没有今天的推送记录，自己补跑 | Actions 里多一次 8:22 的运行 |
+| 主跑成功 | 备用 cron 秒退 | 日志 `⏭️ 备用 cron：…已经推送过，秒退（不重复推送）` |
+| 心跳漏报 | 外部心跳服务到点没收到 ping → 给你发邮件；`python scripts/daily.py --stale-demo` 可预览告警文案 | 邮件 / 告警消息 |
+
+### 排障命令
+
+```bash
+python scripts/daily.py --status        # 今天推过没有？心跳是什么时候的？
+python scripts/daily.py --backup        # 手动当一次备用 cron
+python scripts/daily.py --stale-demo    # 预览「心跳漏报」的告警文案
+python scripts/daily.py --force         # 今天推过也再推一次（补发用）
+```
+
+### 云端验收（故障注入实测）
+
+| 验收项 | 实测结果 |
+| --- | --- |
+| 失效 DeepSeek Key → 降级 + 告警、且不重试 | run [41317712226](https://github.com/palmer67/github-daily-digest/actions/runs/41317712226)：401 后直接整批降级（`卡片: 0/5`），消息照发（2106 字节 `errcode=0`），再补一条「⚠️ 每日开源速递告警」，日志里没有任何重试记录，全程 7.4s |
+| 失效 webhook → 任务判失败 + 心跳不发 | run [41317983568](https://github.com/palmer67/github-daily-digest/actions/runs/41317983568)：`errcode=93000 invalid webhook url`，`DAILY_EXIT=5`，job 判失败，心跳一步没走 |
+| 心跳漏报 → 触发告警 | run [41317429124](https://github.com/palmer67/github-daily-digest/actions/runs/41317429124)：`✅ 心跳漏报告警文案正确`（外部心跳服务的兜底逻辑，文案不含量任何 key） |
+| 备用 cron 主跑成功时秒退 | run [41317489338](https://github.com/palmer67/github-daily-digest/actions/runs/41317489338)：`⏭️ 备用 cron：2026-11-01 已经推送过，秒退`，`✅ 备用 cron 秒退，没有重复推送` |
+| 心跳真的写进仓库 | run [41318163724](https://github.com/palmer67/github-daily-digest/actions/runs/41318163724)：`心跳: sent（HTTP 200）`，bot 自动提交 `state/heartbeat.json`（commit `69cd8a6`） |
+
+单测从 143 增到 **154**（M5 新增 11 条：心跳读写、ping 跳过/成功/失败、告警文案不含密钥、认证失败只调用一次模型、
+推送失败不写心跳、成功写心跳）。
+
+> 定时触发本身没法提前验收：cron 要等它自己到点。所以上线观察放到 M6，连续 14 天看真实到达时间。
+
+---
+
 ## M0 验收记录（2026-11-01，云端）
 
 首跑即通过：run [41312459131](https://github.com/palmer67/github-daily-digest/actions/runs/41312459131)，runner `ubuntu-26.04`（Azure westus2）。
@@ -362,7 +421,7 @@ python scripts/push.py --split-demo
 ## 密钥纪律
 
 - 三个密钥只存在于 **GitHub Secrets** 和运行时的环境变量里，从不落进仓库文件。
-- 三个 secret：`GITHUB_TOKEN`（Actions 自带）、`DEEPSEEK_API_KEY`、`WECOM_WEBHOOK_URL`；M2 只新增对 `DEEPSEEK_API_KEY` 的读取。
+- 三个必填 secret：`GITHUB_TOKEN`（Actions 自带）、`DEEPSEEK_API_KEY`、`WECOM_WEBHOOK_URL`；一个可选 secret：`HEARTBEAT_URL`（外部心跳，不配就只靠心跳文件 + 仓库提交）。
 - 摘要失败时只把**错误类型**写进日志（`LLMAuthError` 等），从不回显 key；M0 探针日志对 webhook key、DeepSeek key 一律掩码（`key=***`）。
 - 仓库里没有任何 `.env` 或密钥字符串；`.gitignore` 只是兜底，不承担安全职责。
 
@@ -374,6 +433,7 @@ python scripts/push.py --split-demo
 .github/workflows/m2-summarize.yml      M2 单测 + 真实 DeepSeek 20 卡 + 注入测试（仅手动触发）
 .github/workflows/m3-push.yml           M3 单测 + 渲染 + 真发企业微信 + 拆分演练 + 错误 key 注入
 .github/workflows/m4-daily.yml          M4 单测 + 真跑一次 + 幂等秒退 + 第三天/第十天/补不齐演练
+.github/workflows/m5-daily.yml          M5 定时主跑 07:37 + 备用 08:22 + 故障注入（需手动选 mode）
 config/columns.yaml                     栏目与全局配置（改这里就能加栏目）
 state/sent.json                         去重与运行记录（程序自动提交，人不用改）
 src/digest/                             M1 采集层
@@ -383,6 +443,7 @@ src/digest/                             M1 采集层
   readme.py        README raw 优先、API 兜底
   state.py         去重窗口 + 补位（纯函数）
   renderer.py      五段卡片 + 按卡片边界切分（4000 字节）
+  monitor.py       心跳文件 / 外部 ping / 告警文案
   pipeline.py      单栏目流水线（先去重再 enrich，补位靠顺延）
   daily.py         每日编排：采集 → 摘要 → 渲染 → 推送 → 写状态
   cli.py           命令行 + JSON 输出 + 退出码
@@ -400,14 +461,16 @@ scripts/daily.py                        每日编排入口（--dry-run / --colum
 scripts/shortfall_demo.py               补不齐演练（受控实验，验证「今日仅 N 条」）
 scripts/step_summary.py                 生成 Step Summary 表格
 scripts/m0_probe.py                     M0 五项检查
-tests/                                  143 个单测（M1 75 + M2 33 + M3 19 + M4 16）
+state/heartbeat.json                    最近一次成功推送的心跳（程序自动提交）
+tests/                                  154 个单测（M1 75 + M2 33 + M3 19 + M4 16 + M5 11）
 probe/                                  本机实测用的原始探针（参考实现，不参与 Actions）
 审核报告.md                             策划书 v1.1 的实测审核报告
 ```
 
-## 已知限制（M1 – M4 阶段）
+## 已知限制（M1 – M5 阶段）
 
-- 已经能采集 + 生成卡片 + 渲染 + 推送 + 记状态，但**还没有定时任务**：每天要在 Actions 里手动点一次（M5 才上 cron）。
+- 定时任务已上（07:37 主跑 / 08:22 备用），但**真实到达时间还没观察够 14 天**（M6 在做）。
+- 外部心跳需要自己加 `HEARTBEAT_URL` Secret 才生效；没配时只有「心跳文件 + 仓库提交」这一层，收不到邮件告警。
 - 卡片质量靠「白名单 + 难度兜底 + 降级卡」三件套，没有人工复核环节；模型偶尔把次要功能写进「是什么」，
   要等 M3 按真实推送效果再调提示词。
 - 摘要只读 README 头 3000 字 + 安装段 3000 字，超长 README 的中段（常见于 changelog）不参与判断。
