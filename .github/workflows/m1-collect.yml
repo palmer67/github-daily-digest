@@ -1,0 +1,88 @@
+name: M1 采集层
+
+# M1 阶段只手动触发：先在云端证明「5 个栏目都能抓够、过滤生效、切分与去重逻辑有单测」。
+# 定时任务（cron）留到 M5 再加，避免还没接 LLM 就每天往群里推空内容。
+
+on:
+  workflow_dispatch:
+    inputs:
+      columns:
+        description: "只跑这些栏目（逗号分隔，留空=全部启用）"
+        required: false
+        default: ""
+      require_min:
+        description: "每个栏目至少多少条（不足则整个 job 失败；0=不检查）"
+        required: false
+        default: "5"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: m1-collect
+  cancel-in-progress: false
+
+jobs:
+  unit-tests:
+    name: 单元测试
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: 跑单测（过滤 / 去重补位 / 切分 / 配置 / 解析）
+        run: python -m unittest discover -s tests -t tests -v
+
+  collect:
+    name: 采集 dry-run
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: 安装依赖
+        run: python -m pip install -r requirements.txt
+
+      - name: 采集（先记录退出码，摘要照写，最后再判定）
+        shell: bash
+        run: |
+          set -o pipefail
+          set +e
+          python scripts/collect.py \
+            --columns "${{ inputs.columns }}" \
+            --require-min "${{ inputs.require_min }}" \
+            --out build/candidates.json 2>&1 | tee collect.log
+          code=${PIPESTATUS[0]}
+          echo "COLLECT_EXIT=$code" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: 写入步骤摘要
+        if: always()
+        run: python scripts/step_summary.py build/candidates.json >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 上传候选 JSON 与日志
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: m1-candidates
+          path: |
+            build/
+            collect.log
+          if-no-files-found: warn
+
+      - name: 按采集退出码判定成败
+        run: |
+          echo "采集退出码：${COLLECT_EXIT:-missing}"
+          test "${COLLECT_EXIT:-1}" = "0"

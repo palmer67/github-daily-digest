@@ -1,0 +1,92 @@
+# GitHub 每日开源速递 · 栏目配置
+# 依据《项目策划书 v1.1》第 4 节。加栏目 = 加一段配置，不改代码。
+#
+# 约定：
+#   - 本文件任何字段拼错、缺字段，程序启动即报错（不静默用默认值）
+#   - 密钥绝不写在这里：DEEPSEEK_API_KEY / WECOM_WEBHOOK_URL 只来自环境变量（GitHub Secrets）
+#   - query 里的 {14d} / {30d} 会被替换成「今天往前推 N 天」的日期
+
+version: 1
+
+global:
+  timezone: Asia/Shanghai
+  dedupe_days: 7            # 同一项目 7 天内不重复推
+  items_per_column: 5
+  backfill: true            # 去重后不足 5 条时向下顺延补齐（7.3）
+  max_message_bytes: 4000   # 企业微信 markdown 硬上限 4096，留余量
+  llm:
+    provider: deepseek
+    model: deepseek-flash
+    thinking: disabled      # 摘要任务不需要思考链（5.4）
+    temperature: 0.2
+    timeout_s: 90
+    retry: { max: 3, backoff: [1, 4, 12] }
+  notifier: wecom
+
+# 全局质量过滤（3.5）
+filters:
+  exclude_topics: [awesome-list, awesome, list]
+  exclude_name_patterns: ["awesome", "-list$", "cheatsheet", "public-apis", "free-for-dev"]
+  min_readme_chars: 500
+  require_description: true
+  require_language: true
+  max_star_fork_ratio: 20   # star/fork > 20 视为 star 通胀
+
+columns:
+  - id: trending
+    name: 今日热门
+    enabled: true
+    source: github_trending
+    since: daily
+    sort: trending_order
+    dedupe_days: 2          # 榜单栏目去重窗口缩短到 2 天（7.3 特例）
+    max_items: 5
+
+  - id: rising
+    name: 新兴潜力
+    enabled: true
+    source: github_search
+    query: created:>{14d} stars:>200
+    sort: stars
+    pool: 40                # 候选池大小：过滤后从这个池子里向下顺延补位
+    max_items: 5
+
+  - id: dsh-ecosystem
+    name: dsh 生态
+    enabled: true
+    source: github_topic
+    query: dsh-plugin
+    sort: updated
+    pool: 40
+    max_items: 5
+
+  - id: workbench
+    name: 开源工作台
+    enabled: true
+    source: github_search
+    query: agent workbench in:name,description stars:>100
+    sort: active_stars
+    window_days: 30
+    pool: 40
+    max_items: 5
+
+  - id: freebies
+    name: 羊毛专区
+    enabled: true
+    source: github_search
+    query: '"free tier" in:name,description stars:>50'
+    sort: recent_activity   # 按近 30 天活跃度排，不按总 star（3.1）
+    window_days: 30
+    exclude_keywords: [破解, crack, 绕过, 白嫖账号]   # 合规黑名单
+    pool: 60
+    max_items: 5
+
+  # 示例：新增栏目只需加这一段，不改代码
+  - id: finance
+    name: 金融
+    enabled: false
+    source: github_search
+    query: quant OR trading OR fintech
+    sort: stars
+    window_days: 30
+    max_items: 5

@@ -22,3 +22,6 @@ m0-probe.log
 .vscode/
 .DS_Store
 Thumbs.db
+
+# 采集产物
+build/
