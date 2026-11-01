@@ -16,7 +16,8 @@ permissions:
   contents: read
 
 jobs:
-  单元测试:
+  unit-tests:
+    name: 单元测试
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -28,8 +29,9 @@ jobs:
       - name: 跑单测（含摘要层离线用例）
         run: python -m unittest discover -s tests -t tests -v
 
-  摘要 dry-run:
-    needs: 单元测试
+  summarize:
+    name: 摘要 dry-run
+    needs: unit-tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
