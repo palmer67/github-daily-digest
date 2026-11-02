@@ -1,13 +1,12 @@
 name: 每日速递 · 定时投递与监控
 
-# 主跑 07:37（离整点远，避开 Actions 高峰），备用 08:22。
-# 两天都在同一个 workflow 里：备用入口先查「今天成功了吗」，成功就秒退（策划书 5.2）。
+# 主跑北京时间 07:37（离整点远，避开 Actions 高峰），备用 08:22。
+# 两个入口在同一个 workflow 里：备用入口先查「今天成功了吗」，成功就秒退（策划书 5.2）。
+# cron 一律写 UTC（北京时间 = UTC+8）：07:37 北京 = 23:37 前一天 UTC。
 on:
   schedule:
-    - cron: '37 7 * * *'
-      timezone: 'Asia/Shanghai'
-    - cron: '22 8 * * *'
-      timezone: 'Asia/Shanghai'
+    - cron: '37 23 * * *'
+    - cron: '22 0 * * *'
   workflow_dispatch:
     inputs:
       mode:
@@ -74,7 +73,7 @@ jobs:
           set -euo pipefail
           mode="${MODE_INPUT:-}"
           if [ -z "$mode" ]; then
-            if [ "$SCHEDULE" = "22 8 * * *" ]; then mode=backup; else mode=happy; fi
+            if [ "$SCHEDULE" = "22 0 * * *" ]; then mode=backup; else mode=happy; fi
           fi
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
           echo "本轮模式：$mode（schedule=$SCHEDULE）"
