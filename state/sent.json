@@ -1,15 +1,40 @@
 {
   "version": 1,
   "sent": {
+    "BraxisAI/braxis-blueprint": "2026-11-02",
+    "ComposioHQ/composio": "2026-11-02",
     "Defiabell/shotsync": "2026-11-01",
+    "Devin-AXIS/iPolloWork": "2026-11-02",
     "Fei2411/DS-Bot": "2026-11-01",
     "GooDAnDReaDY/dsh-russian-lang": "2026-11-01",
+    "JustAResearcher/gpu-unlock-ada": "2026-11-02",
     "LUgABeEEE/dsh-adapt-packs": "2026-11-01",
     "Serenity-2026/dsh-treecom": "2026-11-01",
     "The-PR-Agent/pr-agent": "2026-11-01",
+    "ai4s-research/open-science": "2026-11-02",
+    "aipoch/open-science": "2026-11-02",
+    "anhao/ai-pose-gallery-zh": "2026-11-02",
     "antongulin/robin": "2026-11-01",
+    "apimartbfu0iej/api-proxy-free-tier": "2026-11-02",
     "apimartntu3sj4aj/ai-api-gateway-free-tier-ja": "2026-11-01",
+    "cjpais/Handy": "2026-11-02",
+    "cloader/dsh-taskboard": "2026-11-02",
+    "deepseek-ai/dsh-superagent-prototype": "2026-11-02",
+    "dennisklappe/CloudMeet": "2026-11-02",
+    "jayantTang/DSH_Mobile": "2026-11-02",
+    "lightpanda-io/browser": "2026-11-02",
+    "loopx-project/loopx": "2026-11-02",
     "lucasforster1108-boop/oracle-snatch": "2026-11-01",
+    "milind-soni/OpenMausBot": "2026-11-02",
+    "morluto/rea": "2026-11-02",
+    "nejib1/Free-LLM": "2026-11-02",
+    "nico-zhuang/dsh-nav-fold": "2026-11-02",
+    "pengchujin/aerial-tv": "2026-11-02",
+    "ranxianglei/billion-context": "2026-11-02",
+    "rddmwmddr/android-ad-cleaner": "2026-11-02",
+    "rociiu/talorys": "2026-11-02",
+    "shiyu-coder/Kronos": "2026-11-02",
+    "thedotmack/claude-mem": "2026-11-02",
     "xingzhen199186/dsh-mini-remote": "2026-11-01"
   },
   "runs": {
@@ -22,6 +47,41 @@
       "heartbeat": "sent",
       "columns": {
         "dsh-ecosystem": {
+          "kept": 5,
+          "target": 5,
+          "shortfall": 0
+        }
+      }
+    },
+    "2026-11-02": {
+      "pushed": true,
+      "messages": 5,
+      "cards": 25,
+      "at": "2026-11-02T09:18:14+0800",
+      "degraded": false,
+      "heartbeat": "skipped",
+      "columns": {
+        "trending": {
+          "kept": 5,
+          "target": 5,
+          "shortfall": 0
+        },
+        "rising": {
+          "kept": 5,
+          "target": 5,
+          "shortfall": 0
+        },
+        "dsh-ecosystem": {
+          "kept": 5,
+          "target": 5,
+          "shortfall": 0
+        },
+        "workbench": {
+          "kept": 5,
+          "target": 5,
+          "shortfall": 0
+        },
+        "freebies": {
           "kept": 5,
           "target": 5,
           "shortfall": 0
