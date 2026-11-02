@@ -1,0 +1,66 @@
+name: 每日速递 · 守望（没跑成就喊人）
+
+# 定时任务最难受的失败不是「跑失败」，而是「压根没跑」——群里安静得没问题。
+# 这个 workflow 每天北京时间 08:10 检查一次：今天没有推送记录就发告警，并让 job 变红
+# （变红会同时触发 GitHub 的失败邮件，等于多一路通知）。
+# 2026-11-02 的事故就是 cron 时区没生效导致一次都没跑，当时没人知道，所以加了它。
+on:
+  schedule:
+    - cron: '10 0 * * *' # 北京时间 08:10（UTC+8）
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-digest-watchdog
+  cancel-in-progress: false
+
+env:
+  TZ: Asia/Shanghai
+
+jobs:
+  watch:
+    name: 08:10 检查今天推没推
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: 装依赖
+        run: pip install -r requirements.txt
+
+      - name: 检查今天有没有推送记录
+        env:
+          WECOM_WEBHOOK_URL: ${{ secrets.WECOM_WEBHOOK_URL }}
+        run: |
+          set -o pipefail
+          set +e
+          python scripts/watchdog.py 2>&1 | tee watchdog.log
+          code=${PIPESTATUS[0]}
+          echo "WATCHDOG_EXIT=$code" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: 写入摘要
+        if: always()
+        run: |
+          {
+            echo "## 守望检查"
+            echo '```'
+            tail -20 watchdog.log 2>/dev/null || echo "没有日志"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 判定结果
+        run: |
+          echo "WATCHDOG_EXIT=$WATCHDOG_EXIT"
+          case "$WATCHDOG_EXIT" in
+            0) echo "✅ 今天已经推送过，不需要告警" ;;
+            3) echo "⚠️ 今天没推送，告警已发出（这个 job 故意变红，方便你注意到）"; exit 1 ;;
+            5) echo "❌ 今天没推送，而且告警也没发出去，需要人工看一下"; exit 1 ;;
+            *) echo "❌ 守望脚本自己出错了（退出码 $WATCHDOG_EXIT）"; exit 1 ;;
+          esac
