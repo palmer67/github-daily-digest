@@ -17,6 +17,7 @@
     "antongulin/robin": "2026-11-01",
     "apimartbfu0iej/api-proxy-free-tier": "2026-11-02",
     "apimartntu3sj4aj/ai-api-gateway-free-tier-ja": "2026-11-01",
+    "apimartop9jtsd/ai-api-gateway-free-tier": "2026-11-03",
     "cjpais/Handy": "2026-11-02",
     "cloader/dsh-taskboard": "2026-11-02",
     "deepseek-ai/dsh-superagent-prototype": "2026-11-02",
@@ -25,16 +26,20 @@
     "lightpanda-io/browser": "2026-11-02",
     "loopx-project/loopx": "2026-11-02",
     "lucasforster1108-boop/oracle-snatch": "2026-11-01",
+    "midudev/itsfree.ai": "2026-11-03",
     "milind-soni/OpenMausBot": "2026-11-02",
     "morluto/rea": "2026-11-02",
     "nejib1/Free-LLM": "2026-11-02",
     "nico-zhuang/dsh-nav-fold": "2026-11-02",
     "pengchujin/aerial-tv": "2026-11-02",
+    "plivo-labs/glance": "2026-11-03",
+    "rahilp/second-brain-cloudflare": "2026-11-03",
     "ranxianglei/billion-context": "2026-11-02",
     "rddmwmddr/android-ad-cleaner": "2026-11-02",
     "rociiu/talorys": "2026-11-02",
     "shiyu-coder/Kronos": "2026-11-02",
     "thedotmack/claude-mem": "2026-11-02",
+    "wauputr4/bansos": "2026-11-03",
     "xingzhen199186/dsh-mini-remote": "2026-11-01"
   },
   "runs": {
@@ -81,6 +86,21 @@
           "target": 5,
           "shortfall": 0
         },
+        "freebies": {
+          "kept": 5,
+          "target": 5,
+          "shortfall": 0
+        }
+      }
+    },
+    "2026-11-03": {
+      "pushed": true,
+      "messages": 1,
+      "cards": 5,
+      "at": "2026-11-03T03:08:06+0000",
+      "degraded": false,
+      "heartbeat": "skipped",
+      "columns": {
         "freebies": {
           "kept": 5,
           "target": 5,
