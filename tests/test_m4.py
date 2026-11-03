@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from digest.models import Candidate  # noqa: E402
 from digest.pipeline import ColumnResult  # noqa: E402
 from digest.renderer import render_messages  # noqa: E402
-from digest.state import already_pushed, load_state_doc, save_state_doc  # noqa: E402
+from digest.state import already_pushed, completed_columns, load_state_doc, save_state_doc  # noqa: E402
 from digest.summarizer import SummaryResult  # noqa: E402
 from digest.summarizer.schema import Card, CostInfo  # noqa: E402
 
@@ -109,7 +109,7 @@ class DailyFlowTest(unittest.TestCase):
             mock.patch("digest.daily.summarize", side_effect=lambda c, cand, text, *a, **k: make_summary(cand)),
         ]
 
-    def _run(self, day: str, dry_run: bool = False, force: bool = False):
+    def _run(self, day: str, dry_run: bool = False, force: bool = False, columns: list[str] | None = None):
         from digest.daily import run_daily
 
         return run_daily(
@@ -119,6 +119,7 @@ class DailyFlowTest(unittest.TestCase):
             gh=mock.Mock(),
             client=FakeClient(),
             notifier=self.notifier,
+            columns=columns,
             dry_run=dry_run,
             force=force,
             log=lambda *_: None,
@@ -147,6 +148,87 @@ class DailyFlowTest(unittest.TestCase):
         self.assertEqual(report.skip_reason, "already_pushed")
         self.assertEqual(len(self.notifier.sent), before, "秒退不能重复推送")
         run_col.assert_not_called()
+
+    def test_partial_column_run_resumes_only_remaining_columns(self):
+        patches = self._patches({"freebies": 5})
+        with patches[0], patches[1], patches[2]:
+            self._run("2026-11-01", columns=["freebies"])
+
+        partial = load_state_doc(self.state)["runs"]["2026-11-01"]
+        self.assertFalse(partial["pushed"])
+        self.assertTrue(partial["columns"]["freebies"]["pushed"])
+        self.assertEqual(len(self.notifier.sent), 1)
+
+        patches = self._patches({"trending": 5, "rising": 5, "dsh-ecosystem": 5, "workbench": 5, "freebies": 5})
+        with patches[0] as run_col, patches[1], patches[2]:
+            self._run("2026-11-01")
+
+        called = [call.args[2].id for call in run_col.call_args_list]
+        self.assertEqual(called, ["trending", "rising", "dsh-ecosystem", "workbench"])
+        self.assertEqual(len(self.notifier.sent), 5)
+        self.assertTrue(all("freebies/" not in message for message in self.notifier.sent[1:]))
+        complete = load_state_doc(self.state)["runs"]["2026-11-01"]
+        self.assertTrue(complete["pushed"])
+        self.assertEqual(complete["messages"], 5)
+        self.assertEqual(complete["cards"], 25)
+
+    def test_push_interruption_resumes_without_repeating_completed_columns(self):
+        class FailOnSecondMessage(FakeNotifier):
+            def send_markdown(self, text: str) -> None:
+                if len(self.sent) == 1:
+                    raise RuntimeError("temporary webhook failure")
+                super().send_markdown(text)
+
+        self.notifier = FailOnSecondMessage()
+        patches = self._patches({})
+        with patches[0], patches[1], patches[2]:
+            first = self._run("2026-11-01")
+
+        partial = load_state_doc(self.state)["runs"]["2026-11-01"]
+        self.assertEqual(first.pushed, 1)
+        self.assertIsNotNone(first.push_error)
+        self.assertFalse(partial["pushed"])
+        self.assertTrue(partial["columns"]["trending"]["pushed"])
+        self.assertFalse(partial["columns"]["rising"]["pushed"])
+
+        self.notifier = FakeNotifier()
+        patches = self._patches({})
+        with patches[0] as run_col, patches[1], patches[2]:
+            resumed = self._run("2026-11-01")
+
+        self.assertEqual(
+            [call.args[2].id for call in run_col.call_args_list],
+            ["rising", "dsh-ecosystem", "workbench", "freebies"],
+        )
+        self.assertEqual(len(self.notifier.sent), 4)
+        self.assertEqual(resumed.push_error, None)
+        complete = load_state_doc(self.state)["runs"]["2026-11-01"]
+        self.assertTrue(complete["pushed"])
+        self.assertEqual(complete["messages"], 5)
+        self.assertEqual(complete["cards"], 25)
+
+    def test_legacy_partial_state_resumes_without_repeating_completed_column(self):
+        sent = {f"freebies/item{i}": "2026-11-01" for i in range(5)}
+        save_state_doc(self.state, {
+            "sent": sent,
+            "runs": {
+                "2026-11-01": {
+                    "pushed": True,
+                    "messages": 1,
+                    "cards": 5,
+                    "columns": {"freebies": {"kept": 5, "target": 5, "shortfall": 0}},
+                }
+            },
+        })
+        doc = load_state_doc(self.state)
+        self.assertTrue(already_pushed(doc, "2026-11-01", ["freebies"]))
+        self.assertFalse(already_pushed(doc, "2026-11-01", ["freebies", "trending"]))
+
+        patches = self._patches({"trending": 5, "rising": 5, "dsh-ecosystem": 5, "workbench": 5, "freebies": 5})
+        with patches[0] as run_col, patches[1], patches[2]:
+            self._run("2026-11-01")
+        self.assertEqual([call.args[2].id for call in run_col.call_args_list], ["trending", "rising", "dsh-ecosystem", "workbench"])
+        self.assertTrue(load_state_doc(self.state)["runs"]["2026-11-01"]["pushed"])
 
     def test_seven_day_old_items_can_come_back(self):
         save_state_doc(self.state, {"sent": {"freebies/item0": "2026-10-25"}, "runs": {}})
@@ -218,6 +300,22 @@ class StateDocTest(unittest.TestCase):
             self.assertEqual(list(doc["sent"]), ["a/b", "b/c"], "写盘时按名字排序，便于看 git diff")
             self.assertTrue(already_pushed(doc, "2026-11-01"))
             self.assertFalse((p.parent / "sent.json.tmp").exists())
+
+    def test_column_completion_honors_explicit_status_and_legacy_records(self):
+        doc = {
+            "runs": {
+                "2026-11-01": {
+                    "pushed": True,
+                    "columns": {
+                        "freebies": {"kept": 5},
+                        "trending": {"kept": 5, "pushed": False},
+                    },
+                }
+            }
+        }
+        self.assertEqual(completed_columns(doc, "2026-11-01"), {"freebies"})
+        self.assertTrue(already_pushed(doc, "2026-11-01", ["freebies"]))
+        self.assertFalse(already_pushed(doc, "2026-11-01", ["freebies", "trending"]))
 
 
 if __name__ == "__main__":

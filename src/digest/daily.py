@@ -23,7 +23,7 @@ from .config import Config, ConfigError, load_config
 from .github import GitHubClient
 from .readme import fetch_readme
 from .renderer import render_messages
-from .state import already_pushed, load_state_doc, save_state_doc
+from .state import already_pushed, completed_columns, load_state_doc, save_state_doc
 from .summarizer import SummaryResult, summarize
 from .summarizer.deepseek import DeepSeekClient, LLMAuthError
 from .summarizer.schema import fallback_card
@@ -245,25 +245,31 @@ def run_daily(
 
     if dry_run:
         log("⚠️ dry-run：只采集 + 摘要 + 渲染，不推送、不写状态")
-        doc = load_state_doc(state_path)
-    else:
-        doc = load_state_doc(state_path)
+    doc = load_state_doc(state_path)
     sent: dict[str, str] = dict(doc.get("sent", {}))
+    config = load_config(config_path)
+    picked = _pick_columns(config, columns)
+    requested_ids = [column.id for column in picked]
+    previous_completed = completed_columns(doc, day)
 
-    if not force and not dry_run and already_pushed(doc, day):
+    if not force and not dry_run and already_pushed(doc, day, requested_ids):
         report.skipped = True
         report.skip_reason = "already_pushed"
         report.seconds = time.time() - started
-        log(f"⏭️  {day} 已经推送过（runs 里有 pushed=true），本次直接退出，不重复推送")
+        log(f"⏭️  {day} 请求的栏目已经推送过，本次直接退出，不重复推送")
         return report
 
-    config = load_config(config_path)
+    if not force and not dry_run:
+        picked = [column for column in picked if column.id not in previous_completed]
+        if len(picked) != len(requested_ids):
+            completed = ", ".join(cid for cid in requested_ids if cid in previous_completed)
+            log(f"已完成栏目：{completed}；本轮续跑剩余栏目")
+
     log(f"日期        : {day}")
-    picked = _pick_columns(config, columns)
     log(f"栏目        : {len(picked)} 个（{'/'.join(c.id for c in picked)}）")
     log("-" * 64)
 
-    rendered, runs, notes = build_columns(day, config, gh, sent, columns)
+    rendered, runs, notes = build_columns(day, config, gh, sent, [c.id for c in picked])
     for run in runs:
         log(("❌ " if run.error else "✅ ") + run.headline)
 
@@ -295,7 +301,11 @@ def run_daily(
         log(f"⚠️  {warning}")
 
     pushed = 0
+    pushed_by_column: dict[str, int] = {}
+    messages_by_column: dict[str, int] = {}
     push_error = None
+    for message in result.messages:
+        messages_by_column[message.column_id] = messages_by_column.get(message.column_id, 0) + 1
     if dry_run or not notifier:
         log("（dry-run 或没有 notifier，跳过推送）")
     else:
@@ -303,6 +313,7 @@ def run_daily(
             try:
                 notifier.send_markdown(msg.text)
                 pushed += 1
+                pushed_by_column[msg.column_id] = pushed_by_column.get(msg.column_id, 0) + 1
                 log(f"📤 [{msg.column_name}] {msg.part}/{msg.parts} 段　{len(msg.text.encode())} 字节　errcode=0")
             except Exception as e:  # noqa: BLE001 - 推送失败要如实记录，不能吞
                 push_error = str(e)
@@ -313,6 +324,20 @@ def run_daily(
     report.pushed = pushed
     report.push_error = push_error
 
+    current_completed = {
+        run.column_id
+        for run in runs
+        if run.error is None
+        and pushed_by_column.get(run.column_id, 0) == messages_by_column.get(run.column_id, 0)
+    }
+    all_completed = previous_completed | current_completed
+    enabled_ids = {column.id for column in config.enabled_columns}
+    day_complete = enabled_ids.issubset(all_completed)
+    previous_run = doc.get("runs", {}).get(day) or {}
+    successful_cards = sum(run.cards_total for run in runs if run.column_id in current_completed)
+    total_pushed_messages = int(previous_run.get("messages") or 0) + pushed
+    total_pushed_cards = int(previous_run.get("cards") or 0) + successful_cards
+
     pushed_ok = push_error is None and pushed == len(result.messages) and pushed > 0
     if pushed_ok and report.alert and notifier is not None:
         try:
@@ -321,26 +346,44 @@ def run_daily(
         except Exception as e:  # noqa: BLE001 - 告警发不出去不能盖掉主流程结果
             log(f"⚠️  告警消息没发出去：{e}")
 
-    if pushed_ok and not dry_run:
+    if pushed_ok and day_complete and not dry_run:
         state_dir = Path(state_path).parent
-        monitor.write_heartbeat(state_dir, day, pushed, total_ok, degraded=bool(report.degraded))
+        monitor.write_heartbeat(state_dir, day, total_pushed_messages, total_pushed_cards, degraded=bool(report.degraded))
         ok, detail = monitor.ping()
         report.heartbeat = "sent" if ok and not detail.startswith("skipped") else ("skipped" if ok else f"failed: {detail}")
         log(f"心跳        : {report.heartbeat}（{detail}）")
+    elif pushed_ok and not day_complete and not dry_run:
+        report.heartbeat = "skipped"
+        log("心跳        : skipped（当天仍有栏目未完成）")
 
     if not dry_run:
-        for _column_id, _name, pairs in cards:
-            for cand, _card in pairs:
-                sent[cand.full_name] = day
+        for column_id, _name, pairs in cards:
+            if column_id in current_completed:
+                for cand, _card in pairs:
+                    sent[cand.full_name] = day
         doc["sent"] = sent
+        column_state = {
+            cid: dict(details)
+            for cid, details in previous_run.get("columns", {}).items()
+            if isinstance(details, dict)
+        }
+        for column_id in previous_completed:
+            column_state.setdefault(column_id, {})["pushed"] = True
+        for column_run in runs:
+            column_state[column_run.column_id] = {
+                "kept": column_run.kept,
+                "target": column_run.target,
+                "shortfall": column_run.shortfall,
+                "pushed": column_run.column_id in current_completed,
+            }
         doc.setdefault("runs", {})[day] = {
-            "pushed": pushed_ok,
-            "messages": pushed,
-            "cards": total_ok,
+            "pushed": day_complete,
+            "messages": total_pushed_messages,
+            "cards": total_pushed_cards,
             "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-            "degraded": bool(report.degraded),
+            "degraded": bool(previous_run.get("degraded") or report.degraded),
             "heartbeat": report.heartbeat,
-            "columns": {c.column_id: {"kept": c.kept, "target": c.target, "shortfall": c.shortfall} for c in runs},
+            "columns": column_state,
         }
         save_state_doc(state_path, doc)
         report.state_written = True

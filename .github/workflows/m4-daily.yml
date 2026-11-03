@@ -1,4 +1,4 @@
-name: M4 每日速递（去重与状态）
+name: M4 验收流程（默认只跑羊毛区）
 
 # 验收目标（策划书第 8 节 M4）：
 #   1) 连续两次运行，同一项目不重复推送
@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       columns:
-        description: "只跑这些栏目（逗号分隔，留空=全部启用栏目）"
+        description: "验收用：默认只跑 freebies；留空=全部启用栏目（DeepSeek 调用更多）"
         required: false
         default: "freebies"
       push:
@@ -23,7 +23,7 @@ permissions:
   contents: write      # M4 验收要求：状态文件自动提交
 
 concurrency:
-  group: m4-daily
+  group: daily-digest
   cancel-in-progress: false
 
 jobs:
@@ -32,6 +32,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref }}
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -52,6 +54,8 @@ jobs:
       COLUMNS: ${{ inputs.columns }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref }}
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"

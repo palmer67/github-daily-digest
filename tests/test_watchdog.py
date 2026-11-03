@@ -45,6 +45,26 @@ class CheckTest(unittest.TestCase):
             self.assertFalse(pushed)
             self.assertIn("还没有 pushed=true", detail)
 
+    def test_partial_column_run_still_alerts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "sent.json"
+            state.write_text(json.dumps({
+                "version": 1,
+                "sent": {"owner/repo": "2026-11-02"},
+                "runs": {
+                    "2026-11-02": {
+                        "pushed": True,
+                        "messages": 1,
+                        "cards": 5,
+                        "columns": {"freebies": {"pushed": True}},
+                    }
+                },
+            }), encoding="utf-8")
+            pushed, detail = watchdog.check("2026-11-02", state)
+        self.assertFalse(pushed)
+        self.assertIn("仅完成栏目 freebies", detail)
+        self.assertIn("仍缺", detail)
+
     def test_missing_state_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             pushed, detail = watchdog.check("2026-11-02", Path(tmp) / "nope.json")

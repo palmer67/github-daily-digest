@@ -83,8 +83,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         hb = monitor.read_heartbeat(Path(args.state).parent)
         today = day
         run = doc.get("runs", {}).get(today, {})
+        enabled_ids = [column.id for column in config.enabled_columns]
         print(f"日期        : {today}")
-        print(f"今天推送过  : {'是' if already_pushed(doc, today) else '否'}")
+        print(f"今天推送过  : {'是' if already_pushed(doc, today, enabled_ids) else '否'}")
         print(f"runs 记录   : {run or '（无）'}")
         print(f"心跳        : {hb or '（没有 heartbeat.json）'}")
         print(f"心跳地址    : {'已配置' if monitor.heartbeat_url() else '未配置（跳过外发）'}")
@@ -97,7 +98,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.backup:
         doc = load_state_doc(args.state)
-        if already_pushed(doc, day):
+        requested_ids = [c.strip() for c in args.columns.split(",") if c.strip()]
+        if not requested_ids:
+            requested_ids = [column.id for column in config.enabled_columns]
+        if not args.force and already_pushed(doc, day, requested_ids):
             print(f"⏭️  备用 cron：{day} 已经推送过，秒退（不重复推送）")
             return EXIT_OK
         hb = monitor.read_heartbeat(Path(args.state).parent)
