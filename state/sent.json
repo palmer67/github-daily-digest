@@ -1,18 +1,27 @@
 {
   "version": 1,
   "sent": {
+    "Aisland-SJL/dsh-worktable": "2026-11-03",
+    "BehiSecc/HuntProxy": "2026-11-03",
     "BraxisAI/braxis-blueprint": "2026-11-02",
     "ComposioHQ/composio": "2026-11-02",
+    "D4Vinci/Scrapling": "2026-11-03",
     "Defiabell/shotsync": "2026-11-01",
     "Devin-AXIS/iPolloWork": "2026-11-02",
+    "Donchitos/Claude-Code-Game-Studios": "2026-11-03",
     "Fei2411/DS-Bot": "2026-11-01",
+    "FlashML-org/FreeToken": "2026-11-03",
     "GooDAnDReaDY/dsh-russian-lang": "2026-11-01",
+    "Incredible-Jian/dsh-Bleach-Violet-Evergarden-Re-Zero-AoT-Themes": "2026-11-03",
     "JustAResearcher/gpu-unlock-ada": "2026-11-02",
     "LUgABeEEE/dsh-adapt-packs": "2026-11-01",
     "Serenity-2026/dsh-treecom": "2026-11-01",
     "The-PR-Agent/pr-agent": "2026-11-01",
+    "Yuuhann1999/agent-storyboard": "2026-11-03",
+    "ZelyStaric/dsh-council": "2026-11-03",
     "ai4s-research/open-science": "2026-11-02",
     "aipoch/open-science": "2026-11-02",
+    "angusdevgo/Seep-Reverse-Lab": "2026-11-03",
     "anhao/ai-pose-gallery-zh": "2026-11-02",
     "antongulin/robin": "2026-11-01",
     "apimartbfu0iej/api-proxy-free-tier": "2026-11-02",
@@ -20,9 +29,17 @@
     "apimartop9jtsd/ai-api-gateway-free-tier": "2026-11-03",
     "cjpais/Handy": "2026-11-02",
     "cloader/dsh-taskboard": "2026-11-02",
+    "datagallery-ai/dataagent": "2026-11-03",
     "deepseek-ai/dsh-superagent-prototype": "2026-11-02",
     "dennisklappe/CloudMeet": "2026-11-02",
+    "dreamor/MemVault": "2026-11-03",
+    "heydamir/unslop": "2026-11-03",
+    "hyprwm/Hyprland": "2026-11-03",
+    "inezmitche46-maker/dsh-usage-stats": "2026-11-03",
+    "interplains/Zero-Breach-Toolkit": "2026-11-03",
     "jayantTang/DSH_Mobile": "2026-11-02",
+    "kingOfSoySauce/dsh-skin-market": "2026-11-03",
+    "l0ng-ai/openidea": "2026-11-03",
     "lightpanda-io/browser": "2026-11-02",
     "loopx-project/loopx": "2026-11-02",
     "lucasforster1108-boop/oracle-snatch": "2026-11-01",
@@ -38,7 +55,10 @@
     "rddmwmddr/android-ad-cleaner": "2026-11-02",
     "rociiu/talorys": "2026-11-02",
     "shiyu-coder/Kronos": "2026-11-02",
+    "storytold/craft-anything": "2026-11-03",
     "thedotmack/claude-mem": "2026-11-02",
+    "vercel-labs/agent-desktop": "2026-11-03",
+    "wangzan101/Mika": "2026-11-03",
     "wauputr4/bansos": "2026-11-03",
     "xingzhen199186/dsh-mini-remote": "2026-11-01"
   },
@@ -95,16 +115,41 @@
     },
     "2026-11-03": {
       "pushed": true,
-      "messages": 1,
-      "cards": 5,
-      "at": "2026-11-03T03:08:06+0000",
+      "messages": 5,
+      "cards": 25,
+      "at": "2026-11-03T12:15:39+0800",
       "degraded": false,
       "heartbeat": "skipped",
       "columns": {
         "freebies": {
           "kept": 5,
           "target": 5,
-          "shortfall": 0
+          "shortfall": 0,
+          "pushed": true
+        },
+        "trending": {
+          "kept": 5,
+          "target": 5,
+          "shortfall": 0,
+          "pushed": true
+        },
+        "rising": {
+          "kept": 5,
+          "target": 5,
+          "shortfall": 0,
+          "pushed": true
+        },
+        "dsh-ecosystem": {
+          "kept": 5,
+          "target": 5,
+          "shortfall": 0,
+          "pushed": true
+        },
+        "workbench": {
+          "kept": 5,
+          "target": 5,
+          "shortfall": 0,
+          "pushed": true
         }
       }
     }
