@@ -215,7 +215,7 @@ class PushFailureTest(unittest.TestCase):
 
     def test_successful_run_writes_heartbeat(self):
         def fake_run_column(client, config, column, sent_map, today, log=print):
-            items = [make_cand(f"freebies/r{i}") for i in range(5)]
+            items = [make_cand(f"{column.id}/r{i}") for i in range(5)]
             return ColumnResult(column=column, items=items, stats={"kept": 5, "shortfall": 0, "deduped": 0, "backfilled": 0})
 
         notifier = FakeNotifier()
@@ -231,16 +231,49 @@ class PushFailureTest(unittest.TestCase):
                 gh=mock.Mock(),
                 client=FakeClient(),
                 notifier=notifier,
-                columns=["freebies"],
                 log=lambda *_: None,
             )
 
         self.assertEqual(report.push_error, None)
         hb = monitor.read_heartbeat(Path(self.tmp.name))
         self.assertEqual(hb["date"], "2026-11-01")
-        self.assertEqual(hb["messages"], 1)
+        self.assertEqual(hb["messages"], 5)
+        self.assertEqual(hb["cards"], 25)
         doc = json.loads(self.state.read_text(encoding="utf-8"))
         self.assertTrue(doc["runs"]["2026-11-01"]["pushed"])
+
+
+class BackupModeTest(unittest.TestCase):
+    def test_backup_runs_remaining_columns_for_legacy_partial_state(self):
+        day = "2026-11-01"
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "sent.json"
+            state.write_text(json.dumps({
+                "version": 1,
+                "sent": {"freebies/item0": day},
+                "runs": {
+                    day: {
+                        "pushed": True,
+                        "messages": 1,
+                        "cards": 5,
+                        "columns": {"freebies": {"kept": 5, "target": 5, "shortfall": 0}},
+                    }
+                },
+            }), encoding="utf-8")
+
+            from scripts.daily import main
+
+            report = mock.Mock(skipped=False, columns=[], push_error=None, pushed=4)
+            with mock.patch("scripts.daily.GitHubClient"), \
+                 mock.patch("scripts.daily.run_daily", return_value=report) as run_daily:
+                exit_code = main([
+                    "--backup", "--offline", "--dry-run", "--date", day, "--state", str(state),
+                ])
+
+        self.assertEqual(exit_code, 0)
+        run_daily.assert_called_once()
+        self.assertIsNone(run_daily.call_args.kwargs["columns"], "备用入口应补跑所有未完成栏目")
+        self.assertTrue(run_daily.call_args.kwargs["dry_run"])
 
 
 if __name__ == "__main__":

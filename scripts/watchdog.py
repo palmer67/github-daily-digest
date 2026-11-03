@@ -19,31 +19,38 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from digest import monitor  # noqa: E402
+from digest.config import ConfigError, load_config  # noqa: E402
 from digest.notifiers.wecom import (  # noqa: E402
     NotifierError,
     WeComError,
     WeComNotifier,
     mask_url,
 )
-from digest.state import already_pushed, load_state_doc  # noqa: E402
+from digest.state import already_pushed, completed_columns, load_state_doc  # noqa: E402
 
 REPO = "palmer67/github-daily-digest"
 ACTIONS_URL = f"https://github.com/{REPO}/actions/workflows/m5-daily.yml"
-DEFAULT_STATE = Path("state/sent.json")
+ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_STATE = ROOT / "state" / "sent.json"
+DEFAULT_CONFIG = ROOT / "config" / "columns.yaml"
 
 
 def build_alert(day: str, reason: str) -> str:
     """告警文案。只讲事实和下一步，不放任何密钥。"""
     return (
         f"## ⚠️ 每日开源速递没跑成（{day}）\n"
-        f"到现在还没有推送记录。{reason}\n"
+        f"到现在还没有完成全部启用栏目。{reason}\n"
         "常见原因：定时任务没触发（cron 时区不对 / 被平台禁用）、"
         "或者任务跑失败了。\n"
         f"[👉 看运行记录]({ACTIONS_URL})"
     )
 
 
-def check(day: str, state_path: Path = DEFAULT_STATE) -> tuple[bool, str]:
+def check(
+    day: str,
+    state_path: Path = DEFAULT_STATE,
+    config_path: Path = DEFAULT_CONFIG,
+) -> tuple[bool, str]:
     """返回 (今天是否已推送, 说明)。"""
     if not state_path.exists():
         return False, "状态文件不存在"
@@ -51,13 +58,24 @@ def check(day: str, state_path: Path = DEFAULT_STATE) -> tuple[bool, str]:
         doc = load_state_doc(state_path)
     except Exception as exc:  # 坏文件也要告警，不能静默
         return False, f"状态文件读不出来（{type(exc).__name__}: {exc}）"
-    if already_pushed(doc, day):
+    try:
+        enabled = [column.id for column in load_config(config_path).enabled_columns]
+    except (ConfigError, OSError) as exc:
+        return False, f"栏目配置读不出来（{type(exc).__name__}: {exc}）"
+    if already_pushed(doc, day, enabled):
         run = doc.get("runs", {}).get(day, {})
         return True, (
             f"今天已经推过：{run.get('messages', '?')} 条消息、"
             f"{run.get('cards', '?')} 张卡"
         )
-    return False, "state/sent.json 里今天还没有 pushed=true 的记录"
+    run = doc.get("runs", {}).get(day, {})
+    done = completed_columns(doc, day)
+    pending = [column_id for column_id in enabled if column_id not in done]
+    if done:
+        return False, f"今天仅完成栏目 {', '.join(c for c in enabled if c in done)}；仍缺 {', '.join(pending)}"
+    if not run:
+        return False, "state/sent.json 里今天还没有 pushed=true 的记录"
+    return False, f"今天尚未完成栏目：{', '.join(pending)}"
 
 
 def _safe_stdout() -> None:

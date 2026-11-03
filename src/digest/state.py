@@ -143,7 +143,34 @@ def save_state_doc(path: str | Path, doc: dict) -> None:
     tmp.replace(p)
 
 
-def already_pushed(doc: dict, day: str) -> bool:
-    """今天是不是已经推过了（备用 cron 秒退靠这个）。"""
+def completed_columns(doc: dict, day: str) -> set[str]:
+    """返回当天确认推送成功的栏目，兼容旧的整次运行记录。"""
     run = doc.get("runs", {}).get(day) or {}
-    return bool(run.get("pushed"))
+    columns = run.get("columns")
+    if not isinstance(columns, dict):
+        return set()
+
+    completed: set[str] = set()
+    for column_id, details in columns.items():
+        if isinstance(details, dict) and details.get("pushed") is True:
+            completed.add(str(column_id))
+        elif run.get("pushed") and isinstance(details, dict) and "pushed" not in details:
+            # Old records only had a run-wide flag, so every listed column succeeded.
+            completed.add(str(column_id))
+    return completed
+
+
+def already_pushed(doc: dict, day: str, columns: Iterable[str] | None = None) -> bool:
+    """检查整次运行或指定栏目是否已推送成功。"""
+    run = doc.get("runs", {}).get(day) or {}
+    if columns is None:
+        return bool(run.get("pushed"))
+
+    required = set(columns)
+    if not required:
+        return bool(run.get("pushed"))
+    column_state = run.get("columns")
+    if run.get("pushed") and (not isinstance(column_state, dict) or not column_state):
+        # Legacy full-run record without per-column details.
+        return True
+    return required.issubset(completed_columns(doc, day))
