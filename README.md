@@ -61,7 +61,7 @@
    `GITHUB_TOKEN` 由 Actions 自动注入，不用建。
 
 4. **手动跑一次或补跑**：Actions → `每日速递 · 定时投递与监控` → Run workflow，模式选 `happy`，栏目留空、强制重发选 `no`。已成功推送的栏目会自动跳过，只补其余栏目。
-5. **等它自己跑**：默认每天北京时间 07:37 触发，另有 08:22 的备用入口（主跑成功时秒退，不重复推送）。cron 一律按 UTC 写（北京 07:37 = 前一天 23:37 UTC）；08:10 还有一道守望，今天没完成全部栏目会在群里告警。M4 是手动验收流程，默认只跑羊毛区，不用于日常补跑。
+5. **等它自己跑**：GitHub Actions 默认每天北京时间 07:37 触发，另有 08:22 的备用入口。Cloudflare 调度器部署并配置密钥后，会在 07:40 和 08:05 再独立检查一次，只有当天未完成全部栏目时才补触发 M5；两边同时触发也由并发组和栏目状态去重。cron 一律按 UTC 写；08:10 还有一道守望，今天没完成全部栏目会在群里告警。部署说明见 [`docs/cloudflare-scheduler.md`](docs/cloudflare-scheduler.md)。M4 是手动验收流程，默认只跑羊毛区，不用于日常补跑。
 
 <details>
 <summary><b>本地试跑（不发群、不花钱）</b></summary>
@@ -158,6 +158,7 @@ src/digest/
 state/                     去重记录、运行记录、心跳（程序自动提交）
 scripts/                   collect / summarize / push / daily / watchdog 等入口
 .github/workflows/         定时投递、漏跑守望、CI（单测）、各阶段验收
+scheduler/                 Cloudflare 独立定时触发器与测试
 tests/                     单元测试
 ```
 
