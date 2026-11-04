@@ -1,0 +1,7 @@
+name = "github-daily-digest-scheduler"
+main = "worker.js"
+compatibility_date = "2026-11-04"
+workers_dev = false
+
+[triggers]
+crons = ["40 23 * * *", "5 0 * * *"]
